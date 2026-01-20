@@ -35,14 +35,16 @@ set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(raylib)
 
-# cimgui (C bindings for Dear ImGui)
+# Dear ImGui (C++ version - docking branch for rlImGui compatibility)
 FetchContent_Declare(
-  cimgui
-  GIT_REPOSITORY https://github.com/cimgui/cimgui.git
-  GIT_TAG master
-  GIT_SUBMODULES "imgui"
+  imgui
+  GIT_REPOSITORY https://github.com/ocornut/imgui.git
+  GIT_TAG docking
 )
-FetchContent_MakeAvailable(cimgui)
+FetchContent_GetProperties(imgui)
+if(NOT imgui_POPULATED)
+  FetchContent_Populate(imgui)
+endif()
 
 # rlImGui (Raylib + ImGui integration)
 FetchContent_Declare(
@@ -68,19 +70,15 @@ FetchContent_MakeAvailable(googletest)
 # LIBRARIES
 # ============================================================================
 
-# cimgui library
-add_library(cimgui_lib STATIC
-  ${cimgui_SOURCE_DIR}/cimgui.cpp
-  ${cimgui_SOURCE_DIR}/imgui/imgui.cpp
-  ${cimgui_SOURCE_DIR}/imgui/imgui_demo.cpp
-  ${cimgui_SOURCE_DIR}/imgui/imgui_draw.cpp
-  ${cimgui_SOURCE_DIR}/imgui/imgui_tables.cpp
-  ${cimgui_SOURCE_DIR}/imgui/imgui_widgets.cpp
+# Dear ImGui library (C++)
+add_library(imgui_lib STATIC
+  ${imgui_SOURCE_DIR}/imgui.cpp
+  ${imgui_SOURCE_DIR}/imgui_demo.cpp
+  ${imgui_SOURCE_DIR}/imgui_draw.cpp
+  ${imgui_SOURCE_DIR}/imgui_tables.cpp
+  ${imgui_SOURCE_DIR}/imgui_widgets.cpp
 )
-target_include_directories(cimgui_lib PUBLIC
-  ${cimgui_SOURCE_DIR}
-  ${cimgui_SOURCE_DIR}/imgui
-)
+target_include_directories(imgui_lib PUBLIC ${imgui_SOURCE_DIR})
 
 # rlImGui library
 add_library(rlimgui_lib STATIC
@@ -88,10 +86,9 @@ add_library(rlimgui_lib STATIC
 )
 target_include_directories(rlimgui_lib PUBLIC
   ${rlimgui_SOURCE_DIR}
-  ${cimgui_SOURCE_DIR}
-  ${cimgui_SOURCE_DIR}/imgui
+  ${imgui_SOURCE_DIR}
 )
-target_link_libraries(rlimgui_lib PUBLIC cimgui_lib raylib)
+target_link_libraries(rlimgui_lib PUBLIC imgui_lib raylib)
 
 # ============================================================================
 # GAME TARGETS - Add your games here
@@ -99,7 +96,8 @@ target_link_libraries(rlimgui_lib PUBLIC cimgui_lib raylib)
 
 # Example game
 add_executable(example_game src/scratch/example_game/main.cpp)
-target_link_libraries(example_game PRIVATE raylib cimgui_lib rlimgui_lib)
+target_include_directories(example_game PRIVATE ${imgui_SOURCE_DIR})
+target_link_libraries(example_game PRIVATE raylib imgui_lib rlimgui_lib)
 if(UNIX AND NOT APPLE)
   target_link_libraries(example_game PRIVATE stdc++)
 endif()
@@ -112,7 +110,8 @@ function(add_game GAME_NAME)
   file(GLOB_RECURSE GAME_SOURCES "src/scratch/${GAME_NAME}/*.cpp")
   if(GAME_SOURCES)
     add_executable(${GAME_NAME} ${GAME_SOURCES})
-    target_link_libraries(${GAME_NAME} PRIVATE raylib cimgui_lib rlimgui_lib)
+    target_include_directories(${GAME_NAME} PRIVATE ${imgui_SOURCE_DIR})
+    target_link_libraries(${GAME_NAME} PRIVATE raylib imgui_lib rlimgui_lib)
     if(UNIX AND NOT APPLE)
       target_link_libraries(${GAME_NAME} PRIVATE stdc++)
     endif()

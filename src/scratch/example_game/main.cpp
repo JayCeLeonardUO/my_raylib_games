@@ -1,9 +1,7 @@
 // Example Game - Raylib + ImGui template
 #include "raylib.h"
 #include "rlImGui.h"
-
-#define CIMGUI_DEFINE_ENUMS_AND_STRUCTS
-#include "cimgui.h"
+#include "imgui.h"
 
 int main()
 {
@@ -42,24 +40,24 @@ int main()
     // ImGui
     rlImGuiBegin();
 
-    if (igBegin("Game Settings", NULL, 0)) {
-      igText("FPS: %d", GetFPS());
-      igSeparator();
+    if (ImGui::Begin("Game Settings")) {
+      ImGui::Text("FPS: %d", GetFPS());
+      ImGui::Separator();
 
-      igSliderFloat("Speed", &speed, 50.0f, 500.0f, "%.0f", 0);
-      igSliderFloat("Radius", &ballRadius, 5.0f, 100.0f, "%.0f", 0);
+      ImGui::SliderFloat("Speed", &speed, 50.0f, 500.0f, "%.0f");
+      ImGui::SliderFloat("Radius", &ballRadius, 5.0f, 100.0f, "%.0f");
 
       float col[3] = { ballColor.r / 255.0f, ballColor.g / 255.0f, ballColor.b / 255.0f };
-      if (igColorEdit3("Color", col, 0)) {
+      if (ImGui::ColorEdit3("Color", col)) {
         ballColor = (Color){ (unsigned char)(col[0] * 255), (unsigned char)(col[1] * 255), (unsigned char)(col[2] * 255), 255 };
       }
 
-      igSeparator();
-      if (igButton("Reset Position", (ImVec2){ 120, 0 })) {
+      ImGui::Separator();
+      if (ImGui::Button("Reset Position", ImVec2(120, 0))) {
         ballPos = (Vector2){ screenWidth / 2.0f, screenHeight / 2.0f };
       }
     }
-    igEnd();
+    ImGui::End();
 
     rlImGuiEnd();
     EndDrawing();
