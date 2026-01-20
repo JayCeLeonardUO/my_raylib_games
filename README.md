@@ -29,5 +29,5 @@ cmake --build build
 ## Dependencies (fetched automatically)
 
 - Raylib 5.5
-- Dear ImGui (via cimgui)
+- Dear ImGui (C++, docking branch)
 - rlImGui

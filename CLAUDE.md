@@ -22,7 +22,7 @@ cmake --build build --target <game_name>
 
 ## Dependencies (auto-fetched)
 - Raylib 5.5
-- cimgui (C bindings for Dear ImGui)
+- Dear ImGui (C++, docking branch)
 - rlImGui (Raylib + ImGui integration)
 - Google Test
 
