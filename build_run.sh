@@ -1,0 +1,3 @@
+#!/bin/bash
+cd "$(dirname "$0")"
+cmake -B build && cmake --build build --target example_game && ./build/example_game
