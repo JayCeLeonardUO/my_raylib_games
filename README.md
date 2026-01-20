@@ -2,16 +2,17 @@
 
 Collection of games built with Raylib + ImGui.
 
-## Build
+## Quick Start
+
+```bash
+./build_run.sh
+```
+
+## Manual Build
 
 ```bash
 cmake -B build
 cmake --build build
-```
-
-## Run
-
-```bash
 ./build/example_game
 ```
 
