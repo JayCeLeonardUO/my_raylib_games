@@ -1,0 +1,32 @@
+# Doxyfile for my_raylib_games
+
+PROJECT_NAME           = "My Raylib Games"
+PROJECT_BRIEF          = "Raylib game projects"
+OUTPUT_DIRECTORY       = docs
+INPUT                  = src
+RECURSIVE              = YES
+FILE_PATTERNS          = *.cpp *.hpp *.h *.dox
+
+# Extract documentation
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = YES
+EXTRACT_STATIC         = YES
+
+# HTML output
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+
+# Disable LaTeX
+GENERATE_LATEX         = NO
+
+# Source browsing
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = NO
+
+# Graphs (requires graphviz)
+HAVE_DOT               = YES
+CALL_GRAPH             = YES
+CALLER_GRAPH           = YES
+
+# Exclude build artifacts
+EXCLUDE_PATTERNS       = */build/* */_deps/*

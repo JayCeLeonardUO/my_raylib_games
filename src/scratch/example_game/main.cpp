@@ -1,13 +1,36 @@
-// Example Game - Raylib + ImGui template
+/**
+ * @file main.cpp
+ * @brief Example Game - Raylib + ImGui template
+ *
+ * A simple example demonstrating Raylib window setup, ImGui integration,
+ * and basic input handling. Use this as a starting point for new games.
+ *
+ * @section controls Controls
+ * - WASD or Arrow keys: Move the ball
+ *
+ * @section features Features
+ * - Raylib window with 60 FPS target
+ * - ImGui debug panel for tweaking game settings
+ * - Real-time color, speed, and size adjustments
+ */
+
 #include "raylib.h"
 #include "rlImGui.h"
 #include "imgui.h"
 
+/**
+ * @brief Main entry point for the example game
+ *
+ * Initializes Raylib window and ImGui, then runs the main game loop.
+ * The game displays a movable ball with an ImGui settings panel.
+ *
+ * @return 0 on successful exit
+ */
 int main()
 {
   // Window setup
-  const int screenWidth = 1280;
-  const int screenHeight = 720;
+  const int screenWidth = 1280;   ///< Window width in pixels
+  const int screenHeight = 720;   ///< Window height in pixels
   InitWindow(screenWidth, screenHeight, "Example Game");
   SetTargetFPS(60);
 
@@ -15,15 +38,15 @@ int main()
   rlImGuiSetup(true);
 
   // Game state
-  Vector2 ballPos = { screenWidth / 2.0f, screenHeight / 2.0f };
-  float ballRadius = 20.0f;
-  Color ballColor = RED;
-  float speed = 200.0f;
+  Vector2 ballPos = { screenWidth / 2.0f, screenHeight / 2.0f };  ///< Ball position
+  float ballRadius = 20.0f;   ///< Ball radius in pixels
+  Color ballColor = RED;      ///< Ball color
+  float speed = 200.0f;       ///< Movement speed in pixels per second
 
   while (!WindowShouldClose()) {
     float dt = GetFrameTime();
 
-    // Input
+    // Input handling
     if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP))    ballPos.y -= speed * dt;
     if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN))  ballPos.y += speed * dt;
     if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT))  ballPos.x -= speed * dt;
@@ -33,11 +56,11 @@ int main()
     BeginDrawing();
     ClearBackground(DARKGRAY);
 
-    // Draw game
+    // Draw game objects
     DrawCircleV(ballPos, ballRadius, ballColor);
     DrawText("WASD or Arrow keys to move", 10, 10, 20, WHITE);
 
-    // ImGui
+    // ImGui debug panel
     rlImGuiBegin();
 
     if (ImGui::Begin("Game Settings")) {
