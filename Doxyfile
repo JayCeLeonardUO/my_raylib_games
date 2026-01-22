@@ -15,6 +15,9 @@ EXTRACT_STATIC         = YES
 # HTML output
 GENERATE_HTML          = YES
 HTML_OUTPUT            = html
+GENERATE_TREEVIEW      = YES
+DISABLE_INDEX          = NO
+FULL_SIDEBAR           = NO
 
 # Disable LaTeX
 GENERATE_LATEX         = NO

@@ -22,6 +22,15 @@ jobs:
       - name: Generate docs
         run: doxygen Doxyfile
 
+      - name: Debug - List generated files
+        run: |
+          echo "=== docs directory ==="
+          ls -la docs/ || echo "docs/ not found"
+          echo "=== docs/html directory ==="
+          ls -la docs/html/ || echo "docs/html/ not found"
+          echo "=== index.html exists? ==="
+          cat docs/html/index.html | head -20 || echo "index.html not found"
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
