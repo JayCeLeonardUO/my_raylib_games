@@ -37,4 +37,17 @@
  *
  * @section libs Libraries
  * - @ref ilist.hpp "ilist" - Custom data structures
+ *
+ * @section docs Documentation
+ * This documentation is auto-generated using Doxygen and deployed via GitHub Actions.
+ *
+ * To build docs locally:
+ * @code{.sh}
+ * sudo apt install doxygen graphviz
+ * doxygen Doxyfile
+ * xdg-open docs/html/index.html
+ * @endcode
+ *
+ * @section author Author
+ * JayCe Leonard - https://github.com/JayCeLeonardUO
  */
