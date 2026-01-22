@@ -3,3 +3,4 @@
 
 // Include headers with embedded tests
 #include "ilist.hpp"
+#include "hexgrid_math.hpp"

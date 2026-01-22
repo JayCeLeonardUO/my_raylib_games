@@ -316,22 +316,16 @@ private:
 // DOCTEST - Tests run when compiled with tests_main.cpp
 // ============================================================================
 #ifdef DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include "hexgrid_math.hpp"
-#include "imgui.h"
-#include "raylib.h"
-#include "rlImGui.h"
-#include <cmath>
 #include <doctest/doctest.h>
 
 struct Enemy {
   float x = 0, y = 0;
   int health = 100;
-  Color color = RED;
 };
 
 TEST_CASE("things_list basic creation") {
   things_list<Enemy> enemies;
-  CHECK(true); // List created without crash
+  CHECK(true);
 }
 
 TEST_CASE("things_list thing_ref default state") {
@@ -351,83 +345,6 @@ TEST_CASE("things_list access by index") {
   thing.health = 50;
 
   CHECK(enemies[ref].health == 50);
-}
-
-TEST_CASE("hex grid demo" * doctest::skip()) {
-  // Hex grid demo using hexgrid_math.hpp
-  // Run with: ./mylibs_tests --no-skip -tc="hex grid demo"
-
-  const int screenWidth = 1280;
-  const int screenHeight = 720;
-  InitWindow(screenWidth, screenHeight, "Hex Grid Demo");
-  SetTargetFPS(60);
-  rlImGuiSetup(true);
-
-  // Configure and create hex grid
-  HexGridConfig config = {10, 12, {(float)screenWidth - 100, (float)screenHeight - 100}};
-  HexDims dims = hexDims_from_config(config);
-  Vector2* positions = calculate_hexgrid(config, dims);
-
-  int selected = (config.rows / 2) * config.cols + (config.cols / 2);  // center hex
-  int count = config.rows * config.cols;
-
-  while (!WindowShouldClose()) {
-    // Navigation
-    int row, col;
-    hex_rowcol(selected, config.cols, &row, &col);
-
-    if (IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_D)) {
-      if (col < config.cols - 1) selected++;
-    }
-    if (IsKeyPressed(KEY_LEFT) || IsKeyPressed(KEY_A)) {
-      if (col > 0) selected--;
-    }
-    if (IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S)) {
-      if (row < config.rows - 1) selected += config.cols;
-    }
-    if (IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_W)) {
-      if (row > 0) selected -= config.cols;
-    }
-
-    BeginDrawing();
-    ClearBackground(DARKGRAY);
-
-    // Draw all hexes
-    for (int i = 0; i < count; i++) {
-      bool is_selected = (i == selected);
-      Color fill = is_selected ? YELLOW : DARKBLUE;
-      draw_hex_filled(positions[i], dims.radius * 0.95f, fill);
-      draw_hex(positions[i], dims.radius, WHITE);
-
-      // Draw index
-      int r, c;
-      hex_rowcol(i, config.cols, &r, &c);
-      DrawText(TextFormat("%d,%d", r, c),
-               (int)positions[i].x - 12, (int)positions[i].y - 6, 12, WHITE);
-    }
-
-    DrawText("Arrow keys / WASD: Navigate", 10, 10, 20, WHITE);
-
-    // ImGui panel
-    rlImGuiBegin();
-    if (ImGui::Begin("Hex Grid")) {
-      ImGui::Text("FPS: %d", GetFPS());
-      ImGui::Separator();
-      ImGui::Text("Grid: %d x %d", config.rows, config.cols);
-      ImGui::Text("Hex radius: %.1f", dims.radius);
-      ImGui::Text("Selected: %d (row %d, col %d)", selected, row, col);
-      ImGui::Text("Position: (%.1f, %.1f)", positions[selected].x, positions[selected].y);
-    }
-    ImGui::End();
-    rlImGuiEnd();
-
-    EndDrawing();
-  }
-
-  free(positions);
-  rlImGuiShutdown();
-  CloseWindow();
-  CHECK(true);
 }
 
 #endif
