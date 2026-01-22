@@ -66,6 +66,14 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
+# Doctest
+FetchContent_Declare(
+  doctest
+  GIT_REPOSITORY https://github.com/doctest/doctest.git
+  GIT_TAG v2.4.11
+)
+FetchContent_MakeAvailable(doctest)
+
 # ============================================================================
 # LIBRARIES
 # ============================================================================
@@ -117,3 +125,12 @@ function(add_game GAME_NAME)
     endif()
   endif()
 endfunction()
+
+# ============================================================================
+# TESTS
+# ============================================================================
+
+# Doctest runner for mylibs
+add_executable(mylibs_tests src/mylibs/tests_main.cpp)
+target_include_directories(mylibs_tests PRIVATE src/mylibs)
+target_link_libraries(mylibs_tests PRIVATE doctest::doctest)
