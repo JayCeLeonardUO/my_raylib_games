@@ -15,25 +15,28 @@
  */
 
 #define MAX_ITEMS 1000
+
+// Defined outside template so types can use thing_ref without circular dependency
+enum class ilist_kind {
+  nil,
+  item,
+};
+
+struct thing_ref {
+  ilist_kind kind = ilist_kind::nil;
+  int gen_id = 0;
+  int idx = 0;
+};
+
 template <typename T> struct things_list {
-  enum class Kinds {
-    nil,
-    item,
-  };
+  using Kinds = ilist_kind;
+  using ref = thing_ref;
 
-  struct thing_ref {
-    Kinds kind = Kinds::nil;
-    int gen_id = 0;
-    int idx = 0;
-  };
-
-  struct thing {
+  struct thing : public T {
     Kinds kind = Kinds::nil;
 
     thing_ref prev;
     thing_ref next;
-
-    T data;
 
     /**
      * @brief Get a reference to this thing (computed from list)
@@ -130,11 +133,90 @@ template <typename T> struct things_list {
   thing& operator[](thing_ref ref) { return things[ref.idx]; };
 
   /**
+   * @brief Iterator for iterating over active items
+   */
+  struct iterator {
+    things_list* list;
+    int idx;
+
+    iterator(things_list* l, int i) : list(l), idx(i) {
+      // Skip to first active item
+      while (idx < MAX_ITEMS && !list->used[idx]) {
+        idx++;
+      }
+    }
+
+    thing& operator*() { return list->things[idx]; }
+    thing* operator->() { return &list->things[idx]; }
+
+    iterator& operator++() {
+      idx++;
+      while (idx < MAX_ITEMS && !list->used[idx]) {
+        idx++;
+      }
+      return *this;
+    }
+
+    iterator operator++(int) {
+      iterator tmp = *this;
+      ++(*this);
+      return tmp;
+    }
+
+    bool operator==(const iterator& other) const { return idx == other.idx; }
+    bool operator!=(const iterator& other) const { return idx != other.idx; }
+  };
+
+  iterator begin() { return iterator(this, 0); }
+  iterator end() { return iterator(this, MAX_ITEMS); }
+
+  /**
+   * @brief Const iterator for iterating over active items
+   */
+  struct const_iterator {
+    const things_list* list;
+    int idx;
+
+    const_iterator(const things_list* l, int i) : list(l), idx(i) {
+      while (idx < MAX_ITEMS && !list->used[idx]) {
+        idx++;
+      }
+    }
+
+    const thing& operator*() const { return list->things[idx]; }
+    const thing* operator->() const { return &list->things[idx]; }
+
+    const_iterator& operator++() {
+      idx++;
+      while (idx < MAX_ITEMS && !list->used[idx]) {
+        idx++;
+      }
+      return *this;
+    }
+
+    const_iterator operator++(int) {
+      const_iterator tmp = *this;
+      ++(*this);
+      return tmp;
+    }
+
+    bool operator==(const const_iterator& other) const { return idx == other.idx; }
+    bool operator!=(const const_iterator& other) const { return idx != other.idx; }
+  };
+
+  const_iterator begin() const { return const_iterator(this, 0); }
+  const_iterator end() const { return const_iterator(this, MAX_ITEMS); }
+  const_iterator cbegin() const { return const_iterator(this, 0); }
+  const_iterator cend() const { return const_iterator(this, MAX_ITEMS); }
+
+  /**
    * @brief Remove an item and return it to the free list
    */
   void pop(thing_ref ref) {
-    if (ref.kind == Kinds::nil) return;
-    if (ref.gen_id != gen_id[ref.idx]) return;  // stale ref
+    if (ref.kind == Kinds::nil)
+      return;
+    if (ref.gen_id != gen_id[ref.idx])
+      return; // stale ref
 
     auto& slot = things[ref.idx];
 
@@ -150,7 +232,7 @@ template <typename T> struct things_list {
       things[free_head.idx].prepend(slot.this_ref());
     }
     free_head = slot.this_ref();
-    free_head.kind = Kinds::nil;  // it's a free slot, not an item
+    free_head.kind = Kinds::nil; // it's a free slot, not an item
   }
 
   things_list() {
@@ -186,7 +268,7 @@ template <typename T> struct things_list {
     if (slot_ref.kind == Kinds::nil && !used[slot_ref.idx]) {
       // We got a valid free slot
       auto& slot = things[slot_ref.idx];
-      slot.data = new_thing;
+      static_cast<T&>(slot) = new_thing;
       slot.kind = Kinds::item;
       slot_ref.kind = Kinds::item;
       used[slot_ref.idx] = true;
@@ -208,8 +290,10 @@ private:
    * @brief Get the next available slot from the free list
    * @return thing_ref to the slot (kind=nil if valid free slot, check used[])
    */
+
   thing_ref _get_next_slot() {
-    if (free_head.kind == Kinds::nil && free_head.idx >= 0 && free_head.idx < MAX_ITEMS && !used[free_head.idx]) {
+    if (free_head.kind == Kinds::nil && free_head.idx >= 0 && free_head.idx < MAX_ITEMS &&
+        !used[free_head.idx]) {
       thing_ref result = free_head;
       auto& slot = things[free_head.idx];
 
@@ -223,7 +307,7 @@ private:
     }
     // No free slots
     thing_ref empty{};
-    empty.idx = -1;  // Mark as invalid
+    empty.idx = -1; // Mark as invalid
     return empty;
   }
 };
@@ -232,11 +316,17 @@ private:
 // DOCTEST - Tests run when compiled with tests_main.cpp
 // ============================================================================
 #ifdef DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include "hexgrid_math.hpp"
+#include "imgui.h"
+#include "raylib.h"
+#include "rlImGui.h"
+#include <cmath>
 #include <doctest/doctest.h>
 
 struct Enemy {
   float x = 0, y = 0;
   int health = 100;
+  Color color = RED;
 };
 
 TEST_CASE("things_list basic creation") {
@@ -245,8 +335,8 @@ TEST_CASE("things_list basic creation") {
 }
 
 TEST_CASE("things_list thing_ref default state") {
-  things_list<Enemy>::thing_ref ref;
-  CHECK(ref.kind == things_list<Enemy>::Kinds::nil);
+  thing_ref ref;
+  CHECK(ref.kind == ilist_kind::nil);
   CHECK(ref.gen_id == 0);
   CHECK(ref.idx == 0);
 }
@@ -254,13 +344,90 @@ TEST_CASE("things_list thing_ref default state") {
 TEST_CASE("things_list access by index") {
   things_list<Enemy> enemies;
 
-  things_list<Enemy>::thing_ref ref;
+  thing_ref ref;
   ref.idx = 0;
 
   auto& thing = enemies[ref];
-  thing.data.health = 50;
+  thing.health = 50;
 
-  CHECK(enemies[ref].data.health == 50);
+  CHECK(enemies[ref].health == 50);
+}
+
+TEST_CASE("hex grid demo" * doctest::skip()) {
+  // Hex grid demo using hexgrid_math.hpp
+  // Run with: ./mylibs_tests --no-skip -tc="hex grid demo"
+
+  const int screenWidth = 1280;
+  const int screenHeight = 720;
+  InitWindow(screenWidth, screenHeight, "Hex Grid Demo");
+  SetTargetFPS(60);
+  rlImGuiSetup(true);
+
+  // Configure and create hex grid
+  HexGridConfig config = {10, 12, {(float)screenWidth - 100, (float)screenHeight - 100}};
+  HexDims dims = hexDims_from_config(config);
+  Vector2* positions = calculate_hexgrid(config, dims);
+
+  int selected = (config.rows / 2) * config.cols + (config.cols / 2);  // center hex
+  int count = config.rows * config.cols;
+
+  while (!WindowShouldClose()) {
+    // Navigation
+    int row, col;
+    hex_rowcol(selected, config.cols, &row, &col);
+
+    if (IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_D)) {
+      if (col < config.cols - 1) selected++;
+    }
+    if (IsKeyPressed(KEY_LEFT) || IsKeyPressed(KEY_A)) {
+      if (col > 0) selected--;
+    }
+    if (IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S)) {
+      if (row < config.rows - 1) selected += config.cols;
+    }
+    if (IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_W)) {
+      if (row > 0) selected -= config.cols;
+    }
+
+    BeginDrawing();
+    ClearBackground(DARKGRAY);
+
+    // Draw all hexes
+    for (int i = 0; i < count; i++) {
+      bool is_selected = (i == selected);
+      Color fill = is_selected ? YELLOW : DARKBLUE;
+      draw_hex_filled(positions[i], dims.radius * 0.95f, fill);
+      draw_hex(positions[i], dims.radius, WHITE);
+
+      // Draw index
+      int r, c;
+      hex_rowcol(i, config.cols, &r, &c);
+      DrawText(TextFormat("%d,%d", r, c),
+               (int)positions[i].x - 12, (int)positions[i].y - 6, 12, WHITE);
+    }
+
+    DrawText("Arrow keys / WASD: Navigate", 10, 10, 20, WHITE);
+
+    // ImGui panel
+    rlImGuiBegin();
+    if (ImGui::Begin("Hex Grid")) {
+      ImGui::Text("FPS: %d", GetFPS());
+      ImGui::Separator();
+      ImGui::Text("Grid: %d x %d", config.rows, config.cols);
+      ImGui::Text("Hex radius: %.1f", dims.radius);
+      ImGui::Text("Selected: %d (row %d, col %d)", selected, row, col);
+      ImGui::Text("Position: (%.1f, %.1f)", positions[selected].x, positions[selected].y);
+    }
+    ImGui::End();
+    rlImGuiEnd();
+
+    EndDrawing();
+  }
+
+  free(positions);
+  rlImGuiShutdown();
+  CloseWindow();
+  CHECK(true);
 }
 
 #endif

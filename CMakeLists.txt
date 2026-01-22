@@ -126,11 +126,17 @@ function(add_game GAME_NAME)
   endif()
 endfunction()
 
+# Hex grid demo
+add_game(hexgrid_demo)
+
 # ============================================================================
 # TESTS
 # ============================================================================
 
-# Doctest runner for mylibs
+# Doctest runner for mylibs (with Raylib/ImGui for visual tests)
 add_executable(mylibs_tests src/mylibs/tests_main.cpp)
-target_include_directories(mylibs_tests PRIVATE src/mylibs)
-target_link_libraries(mylibs_tests PRIVATE doctest::doctest)
+target_include_directories(mylibs_tests PRIVATE src/mylibs ${imgui_SOURCE_DIR})
+target_link_libraries(mylibs_tests PRIVATE doctest::doctest raylib imgui_lib rlimgui_lib)
+if(UNIX AND NOT APPLE)
+  target_link_libraries(mylibs_tests PRIVATE stdc++)
+endif()
