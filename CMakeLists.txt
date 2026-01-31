@@ -74,6 +74,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(doctest)
 
+# Boost.PFR (reflection library)
+FetchContent_Declare(
+  pfr
+  GIT_REPOSITORY https://github.com/boostorg/pfr.git
+  GIT_TAG 2.2.0
+)
+FetchContent_MakeAvailable(pfr)
+
 # ============================================================================
 # LIBRARIES
 # ============================================================================
@@ -129,6 +137,19 @@ endfunction()
 # Hex grid demo
 add_game(hexgrid_demo)
 
+# Entity demo (ilist + asset_helpers)
+add_game(entity_demo)
+target_link_libraries(entity_demo PRIVATE Boost::pfr)
+
+# ImGui prototype
+add_game(imgui_prototype)
+
+# Blender GLB Zoo (experiment)
+add_game(blender_glb_zoo)
+
+# GLB Hotload Viewer
+add_game(glb_hotload)
+
 # ============================================================================
 # TESTS
 # ============================================================================
@@ -139,4 +160,15 @@ target_include_directories(mylibs_tests PRIVATE src/mylibs ${imgui_SOURCE_DIR})
 target_link_libraries(mylibs_tests PRIVATE doctest::doctest raylib imgui_lib rlimgui_lib)
 if(UNIX AND NOT APPLE)
   target_link_libraries(mylibs_tests PRIVATE stdc++)
+endif()
+
+# ============================================================================
+# CLI TOOLS
+# ============================================================================
+
+# embed_binary - Embeds binary files into C++ headers
+add_executable(embed_binary src/cli_tools/embed_binary.cpp)
+target_compile_features(embed_binary PRIVATE cxx_std_17)
+if(UNIX AND NOT APPLE)
+  target_link_libraries(embed_binary PRIVATE stdc++fs)
 endif()
