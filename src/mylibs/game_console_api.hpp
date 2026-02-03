@@ -14,7 +14,17 @@ exit
 #include <unordered_map>
 #include <vector>
 
-struct Console {
+/**
+ * @brief In-game developer console with command registration, type-erased context binding, and
+ * ImGui terminal.
+ *
+ * Namespace-style API with all static functions.
+ * Commands are registered via add() or the REGISTER_CMD macro (which uses AutoCmd).
+ * Runtime context is bound via bind<T>() and retrieved via ctx<T>().
+ *
+ * @see AutoCmd, REGISTER_CMD, CMD_CTX
+ */
+struct GameConsoleAPI {
   using Args = std::vector<std::string>;
   using CmdFn = std::function<std::string(Args& args)>;
 
@@ -23,28 +33,71 @@ struct Console {
     std::string help;
   };
 
-  static Console& get() {
-    static Console instance;
-    return instance;
+private:
+  static std::unordered_map<std::size_t, void*>& contexts() {
+    static std::unordered_map<std::size_t, void*> c;
+    return c;
   }
 
+  static std::vector<std::string>& log() {
+    static std::vector<std::string> l;
+    return l;
+  }
+
+  static std::vector<std::string>& history() {
+    static std::vector<std::string> h;
+    return h;
+  }
+
+  static int& historyIndex() {
+    static int i = -1;
+    return i;
+  }
+
+  static char* inputBuf() {
+    static char buf[256] = {0};
+    return buf;
+  }
+
+  static bool& scrollToBottom() {
+    static bool s = false;
+    return s;
+  }
+
+  static bool& focusInput() {
+    static bool f = true;
+    return f;
+  }
+
+  static bool& visibleFlag() {
+    static bool v = false;
+    return v;
+  }
+
+public:
   // ---- Commands ----
 
-  std::unordered_map<std::string, Entry> commands;
+  static std::unordered_map<std::string, Entry>& commands() {
+    static std::unordered_map<std::string, Entry> c;
+    return c;
+  }
 
-  void add(std::string name, CmdFn fn, std::string help = "") { commands[name] = {fn, help}; }
+  static void add(std::string name, CmdFn fn, std::string help = "") {
+    commands()[name] = {fn, help};
+  }
 
-  bool exists(const std::string& name) { return commands.find(name) != commands.end(); }
+  static bool exists(const std::string& name) {
+    return commands().find(name) != commands().end();
+  }
 
-  std::string exec(const std::string& input) {
+  static std::string exec(const std::string& input) {
     auto tokens = tokenize(input);
     if (tokens.empty())
       return "";
     std::string name = tokens[0];
     Args args(tokens.begin() + 1, tokens.end());
-
-    auto it = commands.find(name);
-    if (it == commands.end())
+    auto it = commands().find(name);
+    if (it == commands().end())
       return "Unknown: " + name;
     return it->second.fn(args);
   }
@@ -54,10 +107,8 @@ struct Console {
     std::string token;
     bool in_quotes = false;
     char quote_char = 0;
-
     for (size_t i = 0; i < input.size(); i++) {
       char c = input[i];
-
       if (!in_quotes && (c == '"' || c == '\'')) {
         in_quotes = true;
         quote_char = c;
@@ -80,55 +131,47 @@ struct Console {
 
   // ---- Type-erased context binding ----
 
-  std::unordered_map<std::size_t, void*> contexts;
-
-  template <typename T> void bind(T* obj) {
-    contexts[typeid(T).hash_code()] = static_cast<void*>(obj);
+  template <typename T> static void bind(T* obj) {
+    contexts()[typeid(T).hash_code()] = static_cast<void*>(obj);
   }
 
-  template <typename T> void unbind() { contexts.erase(typeid(T).hash_code()); }
+  template <typename T> static void unbind() { contexts().erase(typeid(T).hash_code()); }
 
-  template <typename T> T* ctx() {
-    auto it = contexts.find(typeid(T).hash_code());
-    if (it == contexts.end())
+  template <typename T> static T* ctx() {
+    auto it = contexts().find(typeid(T).hash_code());
+    if (it == contexts().end())
       return nullptr;
     return static_cast<T*>(it->second);
   }
 
   // ---- Source registration ----
 
-  template <typename T> void register_source(T& source) {
+  template <typename T> static void register_source(T& source) {
     bind(&source);
-    source.register_commands(*this);
+    source.register_commands();
   }
 
   // ---- Terminal state ----
 
-  std::vector<std::string> log;
-  std::vector<std::string> history;
-  int historyIndex = -1;
-  char inputBuf[256] = {0};
-  bool scrollToBottom = false;
-  bool focusInput = true;
-  bool visible = false;
+  static bool visible() { return visibleFlag(); }
 
-  void toggle_visible() {
-    visible = !visible;
-    if (visible)
-      focusInput = true;
+  static void toggle_visible() {
+    visibleFlag() = !visibleFlag();
+    if (visibleFlag())
+      focusInput() = true;
   }
 
-  void print(const std::string& msg) {
-    log.push_back(msg);
-    scrollToBottom = true;
+  static void print(const std::string& msg) {
+    log().push_back(msg);
+    scrollToBottom() = true;
   }
 
-  void clear() { log.clear(); }
+  static void clear() { log().clear(); }
 
-  void execute(const std::string& input) {
+  static void execute(const std::string& input) {
     print("> " + input);
-    history.push_back(input);
-    historyIndex = -1;
+    history().push_back(input);
+    historyIndex() = -1;
     std::string result = exec(input);
     if (!result.empty())
       print(result);
@@ -136,124 +179,90 @@ struct Console {
 
   // ---- ImGui Drawing ----
 
-  void draw_imgui() {
-    if (!visible)
+  static void draw_imgui() {
+    if (!visibleFlag())
       return;
 
-    if (ImGui::Begin("Console", &visible)) {
+    ImGui::SetNextWindowSize(ImVec2(600, 400), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Console", &visibleFlag())) {
+      // Log area
       float footerHeight = ImGui::GetStyle().ItemSpacing.y + ImGui::GetFrameHeightWithSpacing();
-      ImGui::BeginChild("log_region", ImVec2(0, -footerHeight), true);
-
-      for (auto& line : log) {
-        if (!line.empty() && line[0] == '>') {
-          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 1.0f, 0.4f, 1.0f));
-          ImGui::TextWrapped("%s", line.c_str());
-          ImGui::PopStyleColor();
-        } else if (line.find("Unknown") != std::string::npos ||
-                   line.find("Error") != std::string::npos ||
-                   line.find("Usage") != std::string::npos ||
-                   line.find("not bound") != std::string::npos) {
-          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
-          ImGui::TextWrapped("%s", line.c_str());
-          ImGui::PopStyleColor();
-        } else {
-          ImGui::TextWrapped("%s", line.c_str());
-        }
+      ImGui::BeginChild("LogRegion", ImVec2(0, -footerHeight), false,
+                        ImGuiWindowFlags_HorizontalScrollbar);
+      for (const auto& line : log()) {
+        ImGui::TextUnformatted(line.c_str());
       }
-
-      if (scrollToBottom) {
+      if (scrollToBottom()) {
         ImGui::SetScrollHereY(1.0f);
-        scrollToBottom = false;
+        scrollToBottom() = false;
       }
       ImGui::EndChild();
 
-      ImGuiInputTextFlags flags = ImGuiInputTextFlags_EnterReturnsTrue |
-                                  ImGuiInputTextFlags_CallbackHistory |
-                                  ImGuiInputTextFlags_CallbackCompletion;
+      // Input
+      ImGui::Separator();
+      bool reclaimFocus = false;
+      ImGuiInputTextFlags flags =
+          ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackHistory;
 
-      if (focusInput) {
+      if (focusInput()) {
         ImGui::SetKeyboardFocusHere();
-        focusInput = false;
+        focusInput() = false;
       }
 
-      ImGui::PushItemWidth(-1);
-      if (ImGui::InputText(
-              "##cmdinput", inputBuf, sizeof(inputBuf), flags,
-              [](ImGuiInputTextCallbackData* data) -> int {
-                Console* c = (Console*)data->UserData;
-
-                if (data->EventFlag == ImGuiInputTextFlags_CallbackHistory) {
-                  if (c->history.empty())
-                    return 0;
-                  if (data->EventKey == ImGuiKey_UpArrow) {
-                    if (c->historyIndex < 0)
-                      c->historyIndex = (int)c->history.size() - 1;
-                    else if (c->historyIndex > 0)
-                      c->historyIndex--;
-                  } else if (data->EventKey == ImGuiKey_DownArrow) {
-                    if (c->historyIndex >= 0)
-                      c->historyIndex++;
-                    if (c->historyIndex >= (int)c->history.size())
-                      c->historyIndex = -1;
-                  }
-                  const char* str =
-                      (c->historyIndex >= 0) ? c->history[c->historyIndex].c_str() : "";
-                  data->DeleteChars(0, data->BufTextLen);
-                  data->InsertChars(0, str);
-                }
-
-                if (data->EventFlag == ImGuiInputTextFlags_CallbackCompletion) {
-                  std::string partial(data->Buf, data->CursorPos);
-                  std::vector<std::string> matches;
-                  for (auto& [name, entry] : c->commands) {
-                    if (name.substr(0, partial.size()) == partial) {
-                      matches.push_back(name);
-                    }
-                  }
-                  if (matches.size() == 1) {
-                    data->DeleteChars(0, data->BufTextLen);
-                    data->InsertChars(0, matches[0].c_str());
-                    data->InsertChars(data->CursorPos, " ");
-                  } else if (matches.size() > 1) {
-                    std::sort(matches.begin(), matches.end());
-                    std::string list;
-                    for (auto& m : matches)
-                      list += m + "  ";
-                    c->print(list);
-                  }
-                }
-
-                return 0;
-              },
-              this)) {
-        if (inputBuf[0]) {
-          execute(inputBuf);
-          inputBuf[0] = 0;
+      if (ImGui::InputText("##Input", inputBuf(), 256, flags,
+                           [](ImGuiInputTextCallbackData* data) -> int {
+                             if (data->EventFlag == ImGuiInputTextFlags_CallbackHistory) {
+                               auto& hist = history();
+                               auto& idx = historyIndex();
+                               if (data->EventKey == ImGuiKey_UpArrow) {
+                                 if (idx < 0)
+                                   idx = (int)hist.size() - 1;
+                                 else if (idx > 0)
+                                   idx--;
+                               } else if (data->EventKey == ImGuiKey_DownArrow) {
+                                 if (idx >= 0)
+                                   idx++;
+                                 if (idx >= (int)hist.size())
+                                   idx = -1;
+                               }
+                               if (idx >= 0 && idx < (int)hist.size()) {
+                                 data->DeleteChars(0, data->BufTextLen);
+                                 data->InsertChars(0, hist[idx].c_str());
+                               } else if (idx < 0) {
+                                 data->DeleteChars(0, data->BufTextLen);
+                               }
+                             }
+                             return 0;
+                           })) {
+        std::string cmd = inputBuf();
+        if (!cmd.empty()) {
+          execute(cmd);
+          inputBuf()[0] = '\0';
         }
-        focusInput = true;
+        reclaimFocus = true;
       }
-      ImGui::PopItemWidth();
+
+      ImGui::SetItemDefaultFocus();
+      if (reclaimFocus)
+        ImGui::SetKeyboardFocusHere(-1);
     }
     ImGui::End();
   }
-
-private:
-  Console() = default;
 };
 
 // ---- Auto-registration ----
 
 struct AutoCmd {
-  AutoCmd(std::string name, Console::CmdFn fn, std::string help = "") {
-    Console::get().add(name, fn, help);
+  AutoCmd(std::string name, GameConsoleAPI::CmdFn fn, std::string help = "") {
+    GameConsoleAPI::add(name, fn, help);
   }
 };
 
 #define REGISTER_CMD(name, help, ...)                                                              \
-  static AutoCmd _cmd_##name(#name, [](Console::Args & args) -> std::string __VA_ARGS__, help)
+  static AutoCmd _cmd_##name(#name, [](GameConsoleAPI::Args & args) -> std::string __VA_ARGS__, help)
 
 #define CMD_CTX(Type, var)                                                                         \
-  auto* var##_ptr = Console::get().ctx<Type>();                                                    \
+  auto* var##_ptr = GameConsoleAPI::ctx<Type>();                                                   \
   if (!var##_ptr)                                                                                  \
     return std::string(#Type " not bound");                                                        \
   auto& var = *var##_ptr
@@ -264,7 +273,7 @@ REGISTER_CMD(help, "list all commands", {
   (void)args;
   std::string out;
   std::vector<std::pair<std::string, std::string>> sorted;
-  for (auto& [name, entry] : Console::get().commands) {
+  for (auto& [name, entry] : GameConsoleAPI::commands()) {
     sorted.push_back({name, entry.help});
   }
   std::sort(sorted.begin(), sorted.end());
@@ -288,7 +297,7 @@ REGISTER_CMD(echo, "echo args", {
 
 REGISTER_CMD(clear_console, "clear console log", {
   (void)args;
-  Console::get().clear();
+  GameConsoleAPI::clear();
   return "";
 });
 
@@ -302,22 +311,18 @@ REGISTER_CMD(run, "run <file> - execute commands from text file", {
 
   std::string line;
   int executed = 0;
-  int errors = 0;
 
   while (std::getline(file, line)) {
-    // Skip empty lines and comments
     if (line.empty())
       continue;
-    // Trim leading whitespace
     size_t start = line.find_first_not_of(" \t");
     if (start == std::string::npos)
       continue;
     line = line.substr(start);
-    // Skip comments
     if (line[0] == '#' || (line.size() > 1 && line[0] == '/' && line[1] == '/'))
       continue;
 
-    Console::get().execute(line);
+    GameConsoleAPI::execute(line);
     executed++;
   }
 
@@ -368,16 +373,16 @@ TEST_CASE("console visual test") {
   rlImGuiSetup(true);
 
   DemoPlayer player;
-  Console::get().bind<DemoPlayer>(&player);
+  GameConsoleAPI::bind<DemoPlayer>(&player);
 
-  Console::get().visible = true;
-  Console::get().print("Type 'help' for commands. Press ~ to toggle.");
+  GameConsoleAPI::toggle_visible();
+  GameConsoleAPI::print("Type 'help' for commands. Press ~ to toggle.");
 
   Color bgColor = DARKGRAY;
 
-  Console::get().add(
+  GameConsoleAPI::add(
       "color",
-      [&](Console::Args& a) -> std::string {
+      [&](GameConsoleAPI::Args& a) -> std::string {
         if (a.size() < 3)
           return "Usage: color <r> <g> <b>";
         bgColor = {(unsigned char)std::stoi(a[0]), (unsigned char)std::stoi(a[1]),
@@ -388,7 +393,7 @@ TEST_CASE("console visual test") {
 
   while (!WindowShouldClose()) {
     if (IsKeyPressed(KEY_GRAVE))
-      Console::get().toggle_visible();
+      GameConsoleAPI::toggle_visible();
 
     BeginDrawing();
     ClearBackground(bgColor);
@@ -397,14 +402,14 @@ TEST_CASE("console visual test") {
     DrawText(TextFormat("Pos: %.1f %.1f %.1f", player.x, player.y, player.z), 10, 40, 20, WHITE);
 
     rlImGuiBegin();
-    Console::get().draw_imgui();
+    GameConsoleAPI::draw_imgui();
     rlImGuiEnd();
 
     DrawFPS(screenWidth - 100, 10);
     EndDrawing();
   }
 
-  Console::get().unbind<DemoPlayer>();
+  GameConsoleAPI::unbind<DemoPlayer>();
   rlImGuiShutdown();
   CloseWindow();
   CHECK(true);

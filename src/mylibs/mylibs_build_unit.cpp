@@ -2,5 +2,5 @@
 #include "hexgrid_math.hpp"
 #include "ilist.hpp"
 #include "zoo.hpp"
-#include "consol_helpers.hpp"
-#include "model_store.hpp"
+#include "game_console_api.hpp"
+#include "model_api.hpp"

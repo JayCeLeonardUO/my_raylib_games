@@ -26,6 +26,11 @@ struct thing_ref {
   ilist_kind kind = ilist_kind::nil;
   int gen_id = 0;
   int idx = 0;
+
+  bool operator==(const thing_ref& other) const {
+    return kind == other.kind && gen_id == other.gen_id && idx == other.idx;
+  }
+  bool operator!=(const thing_ref& other) const { return !(*this == other); }
 };
 
 template <typename T, size_t N> struct things_list {

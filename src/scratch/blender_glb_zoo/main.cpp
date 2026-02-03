@@ -14,9 +14,9 @@
  * - ~ (grave): Toggle console
  */
 
-#include "../../mylibs/consol_helpers.hpp"
+#include "../../mylibs/game_console_api.hpp"
 #include "../../mylibs/ilist.hpp"
-#include "../../mylibs/model_store.hpp"
+#include "../../mylibs/model_api.hpp"
 #include "../../mylibs/traits.hpp"
 #include <algorithm>
 #include <cmath>
@@ -100,7 +100,6 @@ struct ZooGrid {
 };
 
 struct GlbZoo {
-  ModelStore store;
   GlbList entries;
   std::vector<thing_ref> entry_refs;
 
@@ -145,11 +144,11 @@ struct GlbZoo {
 
     std::string uniqueName = name;
     int suffix = 1;
-    while (store.has(uniqueName)) {
+    while (ModelAPI::has(uniqueName)) {
       uniqueName = name + "_" + std::to_string(suffix++);
     }
 
-    if (!store.load(uniqueName, filepath)) {
+    if (!ModelAPI::load(uniqueName, filepath)) {
       return "Failed to load: " + filepath;
     }
 
@@ -167,14 +166,14 @@ struct GlbZoo {
       entry.folder = ".";
     }
 
-    Model* m = store.get(uniqueName);
+    Model* m = ModelAPI::get(uniqueName);
     if (m && m->meshCount > 0) {
       entry.bounds = GetMeshBoundingBox(m->meshes[0]);
     }
 
     thing_ref ref = entries.add(entry);
     if (ref.kind == ilist_kind::nil) {
-      store.unload(uniqueName);
+      ModelAPI::unload(uniqueName);
       return "Storage full";
     }
     entry_refs.push_back(ref);
@@ -242,7 +241,7 @@ struct GlbZoo {
   }
 
   void unload_all() {
-    store.unload_all();
+    ModelAPI::unload_all();
     for (auto& ref : entry_refs)
       entries.pop(ref);
     entry_refs.clear();
@@ -255,7 +254,7 @@ struct GlbZoo {
   }
 
   void unload(const std::string& name) {
-    store.unload(name);
+    ModelAPI::unload(name);
     for (auto it = entry_refs.begin(); it != entry_refs.end(); ++it) {
       if (entries[*it].name == name) {
         entries.pop(*it);
@@ -281,7 +280,7 @@ struct GlbZoo {
   }
 
   std::string spawn(const std::string& model_name, Vector3 pos, GameTraits traits = {}) {
-    ModelInstance inst = store.instance(model_name);
+    ModelInstance inst = ModelAPI::instance(model_name);
     if (!inst.valid()) {
       return "Model not found: " + model_name;
     }
@@ -544,7 +543,7 @@ struct GlbZoo {
       draw_templates();
     } else {
       // Use instanced drawing from model_store
-      draw_model_store(store, instances);
+      draw_model_store(instances);
 
       // Selection indicator
       if (selectedInstance >= 0 && selectedInstance < (int)instance_refs.size()) {
@@ -564,7 +563,7 @@ struct GlbZoo {
       Vector3 pos = template_position(i);
       pos.y = 0.01f;
 
-      Model* model = store.get(glb.name);
+      Model* model = ModelAPI::get(glb.name);
       if (!model)
         continue;
 
@@ -806,23 +805,23 @@ int main(int argc, char* argv[]) {
   zoo.init_camera();
 
   // Load primitive models for testing
-  zoo.store.load("cube", GenMeshCube(1, 1, 1));
-  zoo.store.load("sphere", GenMeshSphere(0.5f, 16, 16));
-  zoo.store.load("cylinder", GenMeshCylinder(0.3f, 1, 16));
-  zoo.store.load("cone", GenMeshCone(0.5f, 1, 16));
+  ModelAPI::load("cube", GenMeshCube(1, 1, 1));
+  ModelAPI::load("sphere", GenMeshSphere(0.5f, 16, 16));
+  ModelAPI::load("cylinder", GenMeshCylinder(0.3f, 1, 16));
+  ModelAPI::load("cone", GenMeshCone(0.5f, 1, 16));
 
   // Set colors
-  if (Model* m = zoo.store.get("cube"))
+  if (Model* m = ModelAPI::get("cube"))
     m->materials[0].maps[MATERIAL_MAP_DIFFUSE].color = BLUE;
-  if (Model* m = zoo.store.get("sphere"))
+  if (Model* m = ModelAPI::get("sphere"))
     m->materials[0].maps[MATERIAL_MAP_DIFFUSE].color = RED;
-  if (Model* m = zoo.store.get("cylinder"))
+  if (Model* m = ModelAPI::get("cylinder"))
     m->materials[0].maps[MATERIAL_MAP_DIFFUSE].color = GREEN;
-  if (Model* m = zoo.store.get("cone"))
+  if (Model* m = ModelAPI::get("cone"))
     m->materials[0].maps[MATERIAL_MAP_DIFFUSE].color = ORANGE;
 
-  Console::get().bind<GlbZoo>(&zoo);
-  Console::get().print("~ for console. 'help' for commands.");
+  GameConsoleAPI::bind<GlbZoo>(&zoo);
+  GameConsoleAPI::print("~ for console. 'help' for commands.");
 
   const char* path = (argc > 1) ? argv[1] : getenv("GLB_ZOO_PATH");
   if (path)
@@ -837,8 +836,8 @@ int main(int argc, char* argv[]) {
 
   while (!WindowShouldClose()) {
     if (IsKeyPressed(KEY_GRAVE))
-      Console::get().toggle_visible();
-    if (!Console::get().visible)
+      GameConsoleAPI::toggle_visible();
+    if (!GameConsoleAPI::visible())
       zoo.update();
 
     BeginDrawing();
@@ -848,7 +847,7 @@ int main(int argc, char* argv[]) {
 
     rlImGuiBegin();
     zoo.draw_imgui();
-    Console::get().draw_imgui();
+    GameConsoleAPI::draw_imgui();
     rlImGuiEnd();
 
     DrawRectangle(0, screenHeight - 25, screenWidth, 25, {20, 20, 20, 255});
@@ -863,7 +862,7 @@ int main(int argc, char* argv[]) {
     EndDrawing();
   }
 
-  Console::get().unbind<GlbZoo>();
+  GameConsoleAPI::unbind<GlbZoo>();
   zoo.unload_all();
   rlImGuiShutdown();
   CloseWindow();

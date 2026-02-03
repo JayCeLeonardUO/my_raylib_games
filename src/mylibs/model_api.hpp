@@ -3,7 +3,7 @@ cd "$(dirname "$0")/../.." && cmake --build build --target mylibs_tests && ./bui
 exit
 #endif
 #pragma once
-#include "consol_helpers.hpp"
+#include "game_console_api.hpp"
 #include "ilist.hpp"
 #include <cstring>
 #include <raylib.h>
@@ -25,42 +25,58 @@ struct ModelInstance {
   }
 };
 
-// Centralized model storage - load once, instance many times
-struct ModelStore {
-  std::unordered_map<std::string, Model> models;
+/**
+ * @brief Centralized model storage — load once, instance many times.
+ *
+ * Namespace-style API with all static functions.
+ * All loaded Model data is owned by internal static storage.
+ *
+ * @see ModelInstance
+ */
+struct ModelAPI {
+private:
+  static std::unordered_map<std::string, Model>& models() {
+    static std::unordered_map<std::string, Model> m;
+    return m;
+  }
 
-  // Load model from file path
-  bool load(const std::string& name, const std::string& path) {
-    if (models.find(name) != models.end())
-      return true; // already loaded
+public:
+  /// @brief Load a model from a file path. No-op if name already loaded.
+  static bool load(const std::string& name, const std::string& path) {
+    if (models().find(name) != models().end())
+      return true;
     Model m = LoadModel(path.c_str());
     if (m.meshCount == 0)
       return false;
-    models[name] = m;
+    models()[name] = m;
     return true;
   }
 
-  // Load model from mesh
-  bool load(const std::string& name, Mesh mesh) {
-    if (models.find(name) != models.end())
+  /// @brief Load a model from an existing Mesh. No-op if name already loaded.
+  /// Applies magenta color as default "placeholder" material.
+  static bool load(const std::string& name, Mesh mesh) {
+    if (models().find(name) != models().end())
       return true;
-    models[name] = LoadModelFromMesh(mesh);
+    Model m = LoadModelFromMesh(mesh);
+    // Apply magenta as default placeholder color
+    m.materials[0].maps[MATERIAL_MAP_DIFFUSE].color = MAGENTA;
+    models()[name] = m;
     return true;
   }
 
-  // Check if a model is loaded
-  bool has(const std::string& name) const { return models.find(name) != models.end(); }
+  /// @brief Check if a model is loaded.
+  static bool has(const std::string& name) { return models().find(name) != models().end(); }
 
-  // Get raw model pointer (nullptr if not found)
-  Model* get(const std::string& name) {
-    auto it = models.find(name);
-    return it != models.end() ? &it->second : nullptr;
+  /// @brief Get raw model pointer, or nullptr if not found.
+  static Model* get(const std::string& name) {
+    auto it = models().find(name);
+    return it != models().end() ? &it->second : nullptr;
   }
 
-  // Create an instance with fresh transform
-  ModelInstance instance(const std::string& name) {
-    auto it = models.find(name);
-    if (it == models.end())
+  /// @brief Create a ModelInstance with a fresh identity transform.
+  static ModelInstance instance(const std::string& name) {
+    auto it = models().find(name);
+    if (it == models().end())
       return {Model{0}, nullptr};
     ModelInstance inst;
     inst.model = it->second;
@@ -69,29 +85,32 @@ struct ModelStore {
     return inst;
   }
 
-  // Get list of all loaded model names
-  std::vector<std::string> names() const {
+  /// @brief Get list of all loaded model names.
+  static std::vector<std::string> names() {
     std::vector<std::string> result;
-    result.reserve(models.size());
-    for (auto& [name, _] : models)
+    result.reserve(models().size());
+    for (auto& [name, _] : models())
       result.push_back(name);
     return result;
   }
 
-  size_t count() const { return models.size(); }
+  /// @brief Number of loaded models.
+  static size_t count() { return models().size(); }
 
-  void unload(const std::string& name) {
-    auto it = models.find(name);
-    if (it != models.end()) {
+  /// @brief Unload and remove a single model by name.
+  static void unload(const std::string& name) {
+    auto it = models().find(name);
+    if (it != models().end()) {
       UnloadModel(it->second);
-      models.erase(it);
+      models().erase(it);
     }
   }
 
-  void unload_all() {
-    for (auto& [_, model] : models)
+  /// @brief Unload and remove all models.
+  static void unload_all() {
+    for (auto& [_, model] : models())
       UnloadModel(model);
-    models.clear();
+    models().clear();
   }
 };
 
@@ -106,22 +125,16 @@ concept HasModel = requires(T t) {
 };
 
 template <typename T, size_t N>
-void draw_model_store(ModelStore& store, things_list<T, N>& list)
+void draw_model_store(things_list<T, N>& list)
   requires HasModel<T>
 {
-
-  //
-  // collect instance data from things then draw them in a single call per model
-  //
-
-  for (const auto& name : store.names()) {
-    Model* model = store.get(name);
+  for (const auto& name : ModelAPI::names()) {
+    Model* model = ModelAPI::get(name);
     if (!model || model->meshCount == 0)
       continue;
 
     std::vector<Matrix> transforms;
     for (auto& thing : list) {
-      // if the name of the model on the thing matches the target name on the store then draw it
       if (thing.model.valid() && strcmp(thing.model.name, name.c_str()) == 0) {
         transforms.push_back(thing.model.model.transform);
       }
@@ -131,19 +144,12 @@ void draw_model_store(ModelStore& store, things_list<T, N>& list)
 
     Material mat = model->materials[0];
 
-    //
-    // draw collectied instances
-    //
-
     for (int i = 0; i < model->meshCount; i++) {
       DrawMeshInstanced(model->meshes[i], mat, transforms.data(), (int)transforms.size());
     }
   }
 }
 
-REGISTER_CMD(list_models, "list loaded models", { return ""; });
-
-REGISTER_CMD(spawn, "spawn an instance of model", { return ""; });
 // ============================================================================
 // DOCTEST
 // ============================================================================
@@ -151,33 +157,27 @@ REGISTER_CMD(spawn, "spawn an instance of model", { return ""; });
 #include <doctest/doctest.h>
 
 TEST_CASE("model store visual test" * doctest::skip()) {
-  // Run with: ./mylibs_tests --no-skip -tc="model store visual*"
-
   const int screenWidth = 1280;
   const int screenHeight = 720;
   InitWindow(screenWidth, screenHeight, "Model Store Visual Test");
   SetTargetFPS(60);
 
-// ImGui setup
 #include "imgui.h"
 #include "rlImGui.h"
   rlImGuiSetup(true);
 
-  // Create store and load primitive meshes
-  ModelStore store;
-  store.load("cube", GenMeshCube(1.0f, 1.0f, 1.0f));
-  store.load("sphere", GenMeshSphere(0.5f, 16, 16));
-  store.load("cylinder", GenMeshCylinder(0.5f, 1.0f, 16));
-  store.load("torus", GenMeshTorus(0.25f, 0.5f, 16, 16));
-  store.load("knot", GenMeshKnot(0.25f, 0.5f, 16, 128));
-  store.load("plane", GenMeshPlane(2.0f, 2.0f, 1, 1));
-  store.load("cone", GenMeshCone(0.5f, 1.0f, 16));
+  ModelAPI::load("cube", GenMeshCube(1.0f, 1.0f, 1.0f));
+  ModelAPI::load("sphere", GenMeshSphere(0.5f, 16, 16));
+  ModelAPI::load("cylinder", GenMeshCylinder(0.5f, 1.0f, 16));
+  ModelAPI::load("torus", GenMeshTorus(0.25f, 0.5f, 16, 16));
+  ModelAPI::load("knot", GenMeshKnot(0.25f, 0.5f, 16, 128));
+  ModelAPI::load("plane", GenMeshPlane(2.0f, 2.0f, 1, 1));
+  ModelAPI::load("cone", GenMeshCone(0.5f, 1.0f, 16));
 
-  auto modelNames = store.names();
+  auto modelNames = ModelAPI::names();
   std::sort(modelNames.begin(), modelNames.end());
   int selectedIndex = 0;
 
-  // Camera
   Camera3D camera = {0};
   camera.position = {3.0f, 3.0f, 3.0f};
   camera.target = {0.0f, 0.0f, 0.0f};
@@ -191,22 +191,17 @@ TEST_CASE("model store visual test" * doctest::skip()) {
   Color modelColor = BLUE;
 
   while (!WindowShouldClose()) {
-    // Update
     if (autoRotate)
       rotationY += 30.0f * GetFrameTime();
 
-    // Get current model instance
-    ModelInstance inst = store.instance(modelNames[selectedIndex]);
+    ModelInstance inst = ModelAPI::instance(modelNames[selectedIndex]);
 
     BeginDrawing();
     ClearBackground(DARKGRAY);
 
     BeginMode3D(camera);
-
-    // Draw grid
     DrawGrid(10, 1.0f);
 
-    // Draw model
     if (inst.valid()) {
       Vector3 pos = {0.0f, 0.5f, 0.0f};
       if (wireframe) {
@@ -219,14 +214,12 @@ TEST_CASE("model store visual test" * doctest::skip()) {
 
     EndMode3D();
 
-    // ImGui panel
     rlImGuiBegin();
     if (ImGui::Begin("Model Store")) {
       ImGui::Text("FPS: %d", GetFPS());
-      ImGui::Text("Models loaded: %zu", store.count());
+      ImGui::Text("Models loaded: %zu", ModelAPI::count());
       ImGui::Separator();
 
-      // Model selector
       if (ImGui::BeginListBox("Models", ImVec2(-1, 150))) {
         for (int i = 0; i < (int)modelNames.size(); i++) {
           bool selected = (i == selectedIndex);
@@ -263,7 +256,7 @@ TEST_CASE("model store visual test" * doctest::skip()) {
     EndDrawing();
   }
 
-  store.unload_all();
+  ModelAPI::unload_all();
   rlImGuiShutdown();
   CloseWindow();
   CHECK(true);
