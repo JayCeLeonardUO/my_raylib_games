@@ -14,6 +14,7 @@
  */
 
 #pragma once
+#include <climits>
 #include <cmath>
 #include <cstdlib>
 #include <raylib.h>
@@ -195,21 +196,59 @@ const Orientation layout_flat = Orientation(3.0 / 2.0, 0.0, sqrt(3.0) / 2.0, sqr
  * Combines orientation, size, and origin to define how hexes
  * are positioned and scaled in screen space.
  */
-struct Layout {
-  const Orientation orientation; ///< Pointy or flat orientation
-  const Point size;              ///< Size of hex (width/2, height/2)
-  const Point origin;            ///< Screen position of hex (0,0)
-
-  /**
-   * @brief Create a layout configuration
-   * @param orientation_ Pointy or flat orientation (use layout_pointy or layout_flat)
-   * @param size_ Half-width and half-height of hexes in pixels
-   * @param origin_ Screen position where hex (0,0) will be centered
-   */
-  Layout(Orientation orientation_, Point size_, Point origin_)
-      : orientation(orientation_), size(size_), origin(origin_) {}
+/**
+ * @brief Available grid shape types
+ */
+enum class GridShape {
+  Parallelogram,   ///< Parallelogram-shaped grid
+  TriangleDown,    ///< Downward-facing triangle
+  TriangleUp,      ///< Upward-facing triangle
+  Hexagon,         ///< Hexagonal grid with given radius
+  RectanglePointy, ///< Rectangle for pointy-top hexes
+  RectangleFlat    ///< Rectangle for flat-top hexes
 };
 
+/**
+ * @brief Parameters for grid shape generation
+ */
+struct GridParams {
+  int a = 0; ///< q1/left/size/radius depending on shape
+  int b = 0; ///< q2/right
+  int c = 0; ///< r1/top
+  int d = 0; ///< r2/bottom
+};
+
+/**
+ * @brief Layout configuration for rendering hexes
+ *
+ * Combines orientation, size, and origin to define how hexes
+ * are positioned and scaled in screen space.
+ */
+struct Layout {
+  Orientation orientation;
+  Point hex_size = {0, 0};
+  Point origin = {0, 0};
+  GridShape shape = GridShape::Hexagon;
+  GridParams params = {0, 0, 0, 0};
+  uint n_hex = 10;
+
+  Hex operator[](uint index) const;
+
+  struct Iterator {
+    const Layout* layout;
+    uint index;
+    Iterator(const Layout* l, uint i) : layout(l), index(i) {}
+    Hex operator*() const { return (*layout)[index]; }
+    Iterator& operator++() {
+      ++index;
+      return *this;
+    }
+    bool operator!=(const Iterator& other) const { return index != other.index; }
+  };
+
+  Iterator begin() const { return Iterator(this, 0); }
+  Iterator end() const { return Iterator(this, n_hex); }
+};
 /**
  * @brief Convert hex coordinates to screen pixel position
  * @param layout The layout configuration
@@ -218,8 +257,8 @@ struct Layout {
  */
 inline Point hex_to_pixel(Layout layout, Hex h) {
   const Orientation& M = layout.orientation;
-  double x = (M.f0 * h.q + M.f1 * h.r) * layout.size.x;
-  double y = (M.f2 * h.q + M.f3 * h.r) * layout.size.y;
+  double x = (M.f0 * h.q + M.f1 * h.r) * layout.hex_size.x;
+  double y = (M.f2 * h.q + M.f3 * h.r) * layout.hex_size.y;
   return Point{(float)(x + layout.origin.x), (float)(y + layout.origin.y)};
 }
 
@@ -231,8 +270,8 @@ inline Point hex_to_pixel(Layout layout, Hex h) {
  */
 inline FractionalHex pixel_to_hex_fractional(Layout layout, Point p) {
   const Orientation& M = layout.orientation;
-  float ptx = (p.x - layout.origin.x) / layout.size.x;
-  float pty = (p.y - layout.origin.y) / layout.size.y;
+  float ptx = (p.x - layout.origin.x) / layout.hex_size.x;
+  float pty = (p.y - layout.origin.y) / layout.hex_size.y;
   double q = M.b0 * ptx + M.b1 * pty;
   double r = M.b2 * ptx + M.b3 * pty;
   return FractionalHex(q, r, -q - r);
@@ -245,9 +284,30 @@ inline FractionalHex pixel_to_hex_fractional(Layout layout, Point p) {
  * @return Offset from center to the specified corner
  */
 inline Point hex_corner_offset(Layout layout, int corner) {
-  Point size = layout.size;
+  Point size = layout.hex_size;
   double angle = 2.0 * M_PI * (layout.orientation.start_angle + corner) / 6;
   return Point{(float)(size.x * cos(angle)), (float)(size.y * sin(angle))};
+}
+
+/**
+ * @brief Get the bounding box size of a hex
+ * @param layout The layout configuration
+ * @return Width and height that fully contains a hex
+ *
+ * For pointy-top: width = sqrt(3) * size.x, height = 2 * size.y
+ * For flat-top: width = 2 * size.x, height = sqrt(3) * size.y
+ */
+inline Point hex_bounding_size(Layout layout) {
+  const float sqrt3 = 1.732050808f;
+  Point size = layout.hex_size;
+  // Pointy-top has start_angle 0.5, flat-top has 0.0
+  if (layout.orientation.start_angle > 0.25f) {
+    // Pointy-top
+    return {sqrt3 * size.x, 2.0f * size.y};
+  } else {
+    // Flat-top
+    return {2.0f * size.x, sqrt3 * size.y};
+  }
 }
 
 /**
@@ -296,18 +356,6 @@ inline void draw_hex_filled(Layout layout, Hex h, Color color) {
 // ============================================================================
 // GRID SHAPE GENERATORS
 // ============================================================================
-
-/**
- * @brief Available grid shape types
- */
-enum class GridShape {
-  Parallelogram,   ///< Parallelogram-shaped grid
-  TriangleDown,    ///< Downward-facing triangle
-  TriangleUp,      ///< Upward-facing triangle
-  Hexagon,         ///< Hexagonal grid with given radius
-  RectanglePointy, ///< Rectangle for pointy-top hexes
-  RectangleFlat    ///< Rectangle for flat-top hexes
-};
 
 /**
  * @brief Generate a parallelogram-shaped grid
@@ -434,6 +482,112 @@ inline vector<Hex> grid_rectangle_flat(int left, int right, int top, int bottom)
     }
   }
   return hexes;
+}
+
+// inline uint Layout::size() const {
+//   switch (shape) {
+//     case GridShape::Parallelogram:
+//       return grid_parallelogram(params.a, params.b, params.c, params.d).size();
+//     case GridShape::TriangleDown:
+//       return grid_triangle_down(params.a).size();
+//     case GridShape::TriangleUp:
+//       return grid_triangle_up(params.a).size();
+//     case GridShape::Hexagon:
+//       return grid_hexagon(params.a).size();
+//     case GridShape::RectanglePointy:
+//       return grid_rectangle_pointy(params.a, params.b, params.c, params.d).size();
+//     case GridShape::RectangleFlat:
+//       return grid_rectangle_flat(params.a, params.b, params.c, params.d).size();
+//   }
+//   return 0;
+// }
+
+inline Hex Layout::operator[](uint index) const {
+  vector<Hex> hexes;
+  switch (shape) {
+    case GridShape::Parallelogram:
+      hexes = grid_parallelogram(params.a, params.b, params.c, params.d);
+      break;
+    case GridShape::TriangleDown:
+      hexes = grid_triangle_down(params.a);
+      break;
+    case GridShape::TriangleUp:
+      hexes = grid_triangle_up(params.a);
+      break;
+    case GridShape::Hexagon:
+      hexes = grid_hexagon(params.a);
+      break;
+    case GridShape::RectanglePointy:
+      hexes = grid_rectangle_pointy(params.a, params.b, params.c, params.d);
+      break;
+    case GridShape::RectangleFlat:
+      hexes = grid_rectangle_flat(params.a, params.b, params.c, params.d);
+      break;
+  }
+  if (index < hexes.size()) {
+    return hexes[index];
+  }
+  return Hex(0, 0);
+}
+
+inline Vector3 hex_to_world(Layout layout, Hex h, float y = 0.0f) {
+  Point p = hex_to_pixel(layout, h);
+  return Vector3{p.x, y, p.y};
+}
+
+// Round fractional hex to nearest integer hex (cube coordinate rounding)
+inline Hex hex_round(FractionalHex h) {
+  int q = (int)round(h.q);
+  int r = (int)round(h.r);
+  int s = (int)round(h.s);
+  double q_diff = abs(q - h.q);
+  double r_diff = abs(r - h.r);
+  double s_diff = abs(s - h.s);
+  // Reset the component with largest rounding error
+  if (q_diff > r_diff && q_diff > s_diff)
+    q = -r - s;
+  else if (r_diff > s_diff)
+    r = -q - s;
+  else
+    s = -q - r;
+  return Hex(q, r, s);
+}
+
+// Cast mouse ray onto XZ plane, return hex_id or UINT_MAX if missed
+inline uint mouseray_hex(Layout layout, Camera3D camera) {
+  /*
+   uint hovered_id = mouseray_hex(this->hex_layout, camera);
+    if (hovered_id != UINT_MAX && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+      for (auto& thing : things) {
+        if (thing.hex_id == hovered_id) {
+          higlighted_ref = thing.this_ref();
+          break;
+        }
+      }
+    }
+ */
+
+  Ray ray = GetScreenToWorldRay(GetMousePosition(), camera);
+  // Intersect with y=0 plane
+  if (fabsf(ray.direction.y) < 1e-6f)
+    return UINT_MAX;
+  float t = -ray.position.y / ray.direction.y;
+  if (t < 0.0f)
+    return UINT_MAX;
+  // Hit point on XZ plane — maps to layout's 2D space as {x, z}
+  Point hit = {
+      ray.position.x + ray.direction.x * t,
+      ray.position.z + ray.direction.z * t,
+  };
+  Hex h = hex_round(pixel_to_hex_fractional(layout, hit));
+  // Find matching hex_id
+  uint id = 0;
+  for (auto valid : layout) {
+    if (valid == h)
+      return id;
+    id++;
+  }
+  return UINT_MAX;
 }
 
 // ============================================================================

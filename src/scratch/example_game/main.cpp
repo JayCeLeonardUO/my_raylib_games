@@ -14,9 +14,9 @@
  * - Real-time color, speed, and size adjustments
  */
 
+#include "imgui.h"
 #include "raylib.h"
 #include "rlImGui.h"
-#include "imgui.h"
 
 /**
  * @brief Main entry point for the example game
@@ -26,11 +26,10 @@
  *
  * @return 0 on successful exit
  */
-int main()
-{
+int main() {
   // Window setup
-  const int screenWidth = 1280;   ///< Window width in pixels
-  const int screenHeight = 720;   ///< Window height in pixels
+  const int screenWidth = 1280; ///< Window width in pixels
+  const int screenHeight = 720; ///< Window height in pixels
   InitWindow(screenWidth, screenHeight, "Example Game");
   SetTargetFPS(60);
 
@@ -38,19 +37,23 @@ int main()
   rlImGuiSetup(true);
 
   // Game state
-  Vector2 ballPos = { screenWidth / 2.0f, screenHeight / 2.0f };  ///< Ball position
-  float ballRadius = 20.0f;   ///< Ball radius in pixels
-  Color ballColor = RED;      ///< Ball color
-  float speed = 200.0f;       ///< Movement speed in pixels per second
+  Vector2 ballPos = {screenWidth / 2.0f, screenHeight / 2.0f}; ///< Ball position
+  float ballRadius = 20.0f;                                    ///< Ball radius in pixels
+  Color ballColor = RED;                                       ///< Ball color
+  float speed = 200.0f; ///< Movement speed in pixels per second
 
   while (!WindowShouldClose()) {
     float dt = GetFrameTime();
 
     // Input handling
-    if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP))    ballPos.y -= speed * dt;
-    if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN))  ballPos.y += speed * dt;
-    if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT))  ballPos.x -= speed * dt;
-    if (IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT)) ballPos.x += speed * dt;
+    if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP))
+      ballPos.y -= speed * dt;
+    if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN))
+      ballPos.y += speed * dt;
+    if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT))
+      ballPos.x -= speed * dt;
+    if (IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT))
+      ballPos.x += speed * dt;
 
     // Drawing
     BeginDrawing();
@@ -70,14 +73,15 @@ int main()
       ImGui::SliderFloat("Speed", &speed, 50.0f, 500.0f, "%.0f");
       ImGui::SliderFloat("Radius", &ballRadius, 5.0f, 100.0f, "%.0f");
 
-      float col[3] = { ballColor.r / 255.0f, ballColor.g / 255.0f, ballColor.b / 255.0f };
+      float col[3] = {ballColor.r / 255.0f, ballColor.g / 255.0f, ballColor.b / 255.0f};
       if (ImGui::ColorEdit3("Color", col)) {
-        ballColor = (Color){ (unsigned char)(col[0] * 255), (unsigned char)(col[1] * 255), (unsigned char)(col[2] * 255), 255 };
+        ballColor = (Color){(unsigned char)(col[0] * 255), (unsigned char)(col[1] * 255),
+                            (unsigned char)(col[2] * 255), 255};
       }
 
       ImGui::Separator();
       if (ImGui::Button("Reset Position", ImVec2(120, 0))) {
-        ballPos = (Vector2){ screenWidth / 2.0f, screenHeight / 2.0f };
+        ballPos = (Vector2){screenWidth / 2.0f, screenHeight / 2.0f};
       }
     }
     ImGui::End();

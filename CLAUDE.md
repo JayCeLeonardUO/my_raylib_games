@@ -36,3 +36,12 @@ cmake --build build --target <game_name>
 
 ## Template
 Use `src/scratch/example_game/main.cpp` as a starting template - it has Raylib window setup, ImGui panel, and basic input handling.
+
+## Blender MCP
+A Blender MCP server is configured for this project. When the user asks about Blender:
+1. **First check if the MCP is working** - look for blender tools in your available tools
+2. If no blender tools are available, remind the user to:
+   - Make sure Blender is running
+   - Install the `blender-mcp` addon in Blender (Edit > Preferences > Add-ons)
+   - Restart Claude Code session
+3. The MCP allows direct control of Blender (creating objects, modifying scenes, etc.)

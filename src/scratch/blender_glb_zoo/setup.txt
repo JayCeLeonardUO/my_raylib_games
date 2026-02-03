@@ -1,0 +1,26 @@
+# Demo setup for trait system
+# Run in console: run src/scratch/blender_glb_zoo/setup.txt
+
+# Load GLB models
+loaddir /home/jpleona/CLionProjects/my_raylib_games/assets/test_glb_output
+
+# Spawn player with WASD control
+spawn "16x16 Icon10" ctrl,player 0 0 0
+
+# Spawn enemies that chase player
+spawn "16x16 Icon11" chase 8 0 0
+spawn "16x16 Icon12" chase -8 0 0
+spawn "16x16 Icon13" chase 0 0 8
+
+# Spawn wandering entities
+spawn "16x16 Icon14" wander 5 0 5
+spawn "16x16 Icon15" wander -5 0 -5
+
+# Spawn orbiting entity
+spawn "16x16 Icon16" orbit 0 0 0
+
+# Switch to scene mode
+mode s
+
+# List spawned instances
+instances

@@ -28,7 +28,7 @@ struct thing_ref {
   int idx = 0;
 };
 
-template <typename T> struct things_list {
+template <typename T, size_t N> struct things_list {
   using Kinds = ilist_kind;
   using ref = thing_ref;
 
@@ -51,7 +51,7 @@ template <typename T> struct things_list {
 
     thing& operator--() { return this->deref(this->prev); };
 
-    explicit operator bool() const { return this->kind == Kinds::nil; }
+    explicit operator bool() const { return this->kind != Kinds::nil; }
 
     /**
      * @brief Insert ref before this node
@@ -281,10 +281,10 @@ template <typename T> struct things_list {
   }
 
 private:
-  int gen_id[MAX_ITEMS];
-  bool used[MAX_ITEMS];
+  int gen_id[N];
+  bool used[N];
   thing_ref free_head;
-  thing things[MAX_ITEMS];
+  thing things[N];
 
   /**
    * @brief Get the next available slot from the free list
@@ -324,7 +324,7 @@ struct Enemy {
 };
 
 TEST_CASE("things_list basic creation") {
-  things_list<Enemy> enemies;
+  things_list<Enemy, 100> enemies;
   CHECK(true);
 }
 
@@ -336,7 +336,7 @@ TEST_CASE("things_list thing_ref default state") {
 }
 
 TEST_CASE("things_list access by index") {
-  things_list<Enemy> enemies;
+  things_list<Enemy, 100> enemies;
 
   thing_ref ref;
   ref.idx = 0;
