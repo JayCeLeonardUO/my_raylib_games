@@ -1,7 +1,8 @@
 # Doxyfile for my_raylib_games
 
 PROJECT_NAME           = "My Raylib Games"
-PROJECT_BRIEF          = "Raylib game projects"
+PROJECT_BRIEF          = "Raylib game projects and libraries"
+PROJECT_NUMBER         = 1.0
 OUTPUT_DIRECTORY       = docs
 INPUT                  = src
 RECURSIVE              = YES
