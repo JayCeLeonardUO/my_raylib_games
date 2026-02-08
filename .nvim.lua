@@ -32,13 +32,34 @@ local function get_build_info()
   }
 end
 
+-- Session names (game-run is created by build_run.sh)
+local game_session = "game-run"
+
+-- Toggle bottom pane showing game session (Ctrl+T)
+vim.keymap.set("n", "<C-t>", function()
+  -- Check if we already have a pane showing game-run
+  local panes = vim.fn.system("tmux list-panes -F '#{pane_id}:#{pane_current_command}'")
+  if panes:match("tmux") then
+    -- Pane exists, close it
+    vim.fn.system("tmux kill-pane -t {bottom}")
+  else
+    -- Check if game session exists
+    local exists = vim.fn.system("tmux has-session -t " .. game_session .. " 2>/dev/null && echo yes || echo no")
+    if exists:match("yes") then
+      vim.fn.system("tmux split-window -v -l 30% 'tmux attach -t " .. game_session .. "'")
+    else
+      vim.notify("No game session running")
+    end
+  end
+end, { desc = "Toggle game terminal pane" })
+
 -- Build and run in tmux pane (leader+b)
 vim.keymap.set("n", "<leader>b", function()
   local info = get_build_info()
 
-  -- Run in a tmux split pane at the bottom
+  -- Run in a tmux floating popup
   local tmux_cmd = string.format(
-    "tmux split-window -v -l 15 '%s; echo; echo Press enter to close...; read'",
+    "tmux display-popup -w 80%% -h 50%% '%s; exec $SHELL'",
     info.cmd
   )
   vim.fn.system(tmux_cmd)
@@ -70,8 +91,43 @@ vim.api.nvim_create_autocmd({ "FocusGained", "BufEnter", "CursorHold" }, {
   callback = function() vim.cmd("checktime") end,
 })
 
+-- Auto-reload this config when saved
+vim.api.nvim_create_autocmd("BufWritePost", {
+  pattern = "*/.nvim.lua",
+  callback = function()
+    dofile(vim.fn.expand("%:p"))
+    vim.notify(".nvim.lua reloaded")
+  end,
+})
+
 -- LSP code actions (leader+ca)
 vim.keymap.set("n", "<leader>ca", vim.lsp.buf.code_action, { desc = "Code actions" })
+
+-- Open current file's directory in system file explorer (leader+x)
+vim.keymap.set("n", "<leader>x", function()
+  local dir = vim.fn.expand("%:p:h")
+  vim.fn.system("xdg-open " .. vim.fn.shellescape(dir))
+end, { desc = "Open in file explorer" })
+
+-- Toggle AI autocomplete (leader+a)
+vim.keymap.set("n", "<leader>a", function()
+  if vim.g.copilot_enabled == nil then vim.g.copilot_enabled = true end
+  if vim.fn.exists(":Copilot") == 2 then
+    if vim.g.copilot_enabled then
+      vim.cmd("Copilot disable")
+      vim.g.copilot_enabled = false
+      vim.notify("Copilot OFF")
+    else
+      vim.cmd("Copilot enable")
+      vim.g.copilot_enabled = true
+      vim.notify("Copilot ON")
+    end
+  elseif vim.fn.exists(":Codeium") == 2 then
+    vim.cmd("Codeium Toggle")
+  else
+    vim.notify("No AI plugin found")
+  end
+end, { desc = "Toggle AI autocomplete" })
 
 -- Format on save for C/C++ files using clang-format
 
