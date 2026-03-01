@@ -3,7 +3,6 @@ cd "$(dirname "$0")/../.." && cmake --build build --target mylibs_tests && ./bui
 exit
 #endif
 #pragma once
-#include "game_console_api.hpp"
 #include "ilist.hpp"
 #include <cstring>
 #include <raylib.h>
@@ -28,91 +27,88 @@ struct ModelInstance {
 /**
  * @brief Centralized model storage — load once, instance many times.
  *
- * Namespace-style API with all static functions.
- * All loaded Model data is owned by internal static storage.
+ * Namespace-style API with inline globals.
+ * All loaded Model data is owned by internal storage.
  *
  * @see ModelInstance
  */
-struct ModelAPI {
-private:
-  static std::unordered_map<std::string, Model>& models() {
-    static std::unordered_map<std::string, Model> m;
-    return m;
-  }
+namespace ModelAPI {
 
-public:
-  /// @brief Load a model from a file path. No-op if name already loaded.
-  static bool load(const std::string& name, const std::string& path) {
-    if (models().find(name) != models().end())
-      return true;
-    Model m = LoadModel(path.c_str());
-    if (m.meshCount == 0)
-      return false;
-    models()[name] = m;
+inline std::unordered_map<std::string, Model> models;
+
+/// @brief Load a model from a file path. No-op if name already loaded.
+inline bool load(const std::string& name, const std::string& path) {
+  if (models.find(name) != models.end())
     return true;
-  }
+  Model m = LoadModel(path.c_str());
+  if (m.meshCount == 0)
+    return false;
+  models[name] = m;
+  return true;
+}
 
-  /// @brief Load a model from an existing Mesh. No-op if name already loaded.
-  /// Applies magenta color as default "placeholder" material.
-  static bool load(const std::string& name, Mesh mesh) {
-    if (models().find(name) != models().end())
-      return true;
-    Model m = LoadModelFromMesh(mesh);
-    // Apply magenta as default placeholder color
-    m.materials[0].maps[MATERIAL_MAP_DIFFUSE].color = MAGENTA;
-    models()[name] = m;
+/// @brief Load a model from an existing Mesh. No-op if name already loaded.
+/// Applies magenta color as default "placeholder" material.
+inline bool load(const std::string& name, Mesh mesh) {
+  if (models.find(name) != models.end())
     return true;
+  Model m = LoadModelFromMesh(mesh);
+  // Apply magenta as default placeholder color
+  m.materials[0].maps[MATERIAL_MAP_DIFFUSE].color = MAGENTA;
+  models[name] = m;
+  return true;
+}
+
+/// @brief Check if a model is loaded.
+inline bool has(const std::string& name) { return models.find(name) != models.end(); }
+
+/// @brief Get raw model pointer, or nullptr if not found.
+inline Model* get(const std::string& name) {
+  auto it = models.find(name);
+  return it != models.end() ? &it->second : nullptr;
+}
+
+/// @brief Create a ModelInstance with a fresh identity transform.
+inline ModelInstance instance(const std::string& name) {
+  auto it = models.find(name);
+  if (it == models.end())
+    return {Model{0}, nullptr};
+  ModelInstance inst;
+  inst.model = it->second;
+  inst.model.transform = MatrixIdentity();
+  inst.name = it->first.c_str();
+  return inst;
+}
+
+/// @brief Get list of all loaded model names.
+inline std::vector<std::string> names() {
+  std::vector<std::string> result;
+  result.reserve(models.size());
+  for (auto& [name, _] : models)
+    result.push_back(name);
+  return result;
+}
+
+/// @brief Number of loaded models.
+inline size_t count() { return models.size(); }
+
+/// @brief Unload and remove a single model by name.
+inline void unload(const std::string& name) {
+  auto it = models.find(name);
+  if (it != models.end()) {
+    UnloadModel(it->second);
+    models.erase(it);
   }
+}
 
-  /// @brief Check if a model is loaded.
-  static bool has(const std::string& name) { return models().find(name) != models().end(); }
+/// @brief Unload and remove all models.
+inline void unload_all() {
+  for (auto& [_, model] : models)
+    UnloadModel(model);
+  models.clear();
+}
 
-  /// @brief Get raw model pointer, or nullptr if not found.
-  static Model* get(const std::string& name) {
-    auto it = models().find(name);
-    return it != models().end() ? &it->second : nullptr;
-  }
-
-  /// @brief Create a ModelInstance with a fresh identity transform.
-  static ModelInstance instance(const std::string& name) {
-    auto it = models().find(name);
-    if (it == models().end())
-      return {Model{0}, nullptr};
-    ModelInstance inst;
-    inst.model = it->second;
-    inst.model.transform = MatrixIdentity();
-    inst.name = it->first.c_str();
-    return inst;
-  }
-
-  /// @brief Get list of all loaded model names.
-  static std::vector<std::string> names() {
-    std::vector<std::string> result;
-    result.reserve(models().size());
-    for (auto& [name, _] : models())
-      result.push_back(name);
-    return result;
-  }
-
-  /// @brief Number of loaded models.
-  static size_t count() { return models().size(); }
-
-  /// @brief Unload and remove a single model by name.
-  static void unload(const std::string& name) {
-    auto it = models().find(name);
-    if (it != models().end()) {
-      UnloadModel(it->second);
-      models().erase(it);
-    }
-  }
-
-  /// @brief Unload and remove all models.
-  static void unload_all() {
-    for (auto& [_, model] : models())
-      UnloadModel(model);
-    models().clear();
-  }
-};
+} // namespace ModelAPI
 
 /*
  * the way that things should be drawn is that the things in the ilist would have a modelinstance

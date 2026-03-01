@@ -14,5 +14,11 @@ compile_commands.json
 .DS_Store
 Thumbs.db
 
+# Debug
+.gdb_history
+
+# Python cache
+__pycache__/
+
 # Generated docs (built by GitHub Actions)
 docs/

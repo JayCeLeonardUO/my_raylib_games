@@ -82,6 +82,26 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(pfr)
 
+# Lua
+FetchContent_Declare(
+  lua
+  URL https://github.com/lua/lua/archive/refs/tags/v5.4.7.tar.gz
+)
+FetchContent_GetProperties(lua)
+if(NOT lua_POPULATED)
+  FetchContent_Populate(lua)
+  # Build Lua as a static library from source
+  file(GLOB LUA_SOURCES "${lua_SOURCE_DIR}/*.c")
+  list(REMOVE_ITEM LUA_SOURCES "${lua_SOURCE_DIR}/lua.c" "${lua_SOURCE_DIR}/luac.c" "${lua_SOURCE_DIR}/onelua.c")
+  add_library(lua_lib STATIC ${LUA_SOURCES})
+  target_include_directories(lua_lib PUBLIC ${lua_SOURCE_DIR})
+  set_target_properties(lua_lib PROPERTIES LINKER_LANGUAGE C)
+  if(UNIX)
+    target_compile_definitions(lua_lib PRIVATE LUA_USE_POSIX)
+    target_link_libraries(lua_lib PRIVATE m)
+  endif()
+endif()
+
 
 # ============================================================================
 # LIBRARIES
@@ -140,7 +160,7 @@ add_game(hexgrid_demo)
 
 # Entity demo (ilist + asset_helpers)
 add_game(entity_demo)
-target_link_libraries(entity_demo PRIVATE Boost::pfr)
+target_link_libraries(entity_demo PRIVATE Boost::pfr lua_lib)
 
 # ImGui prototype
 add_game(imgui_prototype)
@@ -167,10 +187,3 @@ endif()
 # ============================================================================
 # CLI TOOLS
 # ============================================================================
-
-# embed_binary - Embeds binary files into C++ headers
-add_executable(embed_binary src/cli_tools/embed_binary.cpp)
-target_compile_features(embed_binary PRIVATE cxx_std_17)
-if(UNIX AND NOT APPLE)
-  target_link_libraries(embed_binary PRIVATE stdc++fs)
-endif()

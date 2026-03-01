@@ -129,6 +129,25 @@ vim.keymap.set("n", "<leader>a", function()
   end
 end, { desc = "Toggle AI autocomplete" })
 
+-- Re-source nvim config (leader+cs)
+vim.keymap.set("n", "<leader>cs", function()
+  dofile(vim.fn.expand("%:p:h") .. "/.nvim.lua")
+  vim.notify(".nvim.lua reloaded")
+end, { desc = "Re-source project nvim config" })
+
+-- Open nvim command line (leader+cc)
+vim.keymap.set("n", "<leader>cc", ":", { desc = "Open command line" })
+
+-- Show marks in current file via Telescope (leader+m)
+vim.keymap.set("n", "<leader>m", function()
+  local ok_tel, builtin = pcall(require, "telescope.builtin")
+  if ok_tel then
+    builtin.marks({ prompt_title = "Marks" })
+  else
+    vim.notify("Telescope not available")
+  end
+end, { desc = "Telescope marks" })
+
 -- Format on save for C/C++ files using clang-format
 
 vim.api.nvim_create_autocmd("BufWritePre", {
@@ -137,6 +156,65 @@ vim.api.nvim_create_autocmd("BufWritePre", {
     vim.lsp.buf.format({ async = false })
   end,
 })
+
+-- Mouse-hover outline
+vim.o.mousemoveevent = true
+
+local hover_opened = false
+
+local hover_timer = vim.uv.new_timer()
+
+-- Find the outline window and its width
+local function get_outline_win()
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    local buf = vim.api.nvim_win_get_buf(win)
+    if vim.bo[buf].filetype == 'Outline' then
+      return win, vim.api.nvim_win_get_width(win)
+    end
+  end
+  return nil, 30 -- default width for hover region when closed
+end
+
+vim.keymap.set('', '<MouseMove>', function()
+  hover_timer:stop()
+  hover_timer:start(100, 0, vim.schedule_wrap(function()
+    local pos = vim.fn.getmousepos()
+    local ok_outline, outline = pcall(require, 'outline')
+    if not ok_outline then return end
+
+    local is_open = outline.is_open()
+    local outline_win, outline_width = get_outline_win()
+    local screen_width = vim.o.columns
+    local threshold = screen_width - outline_width
+
+    -- Check if mouse is inside the outline window
+    local mouse_in_outline = is_open and pos.winid ~= 0 and pos.winid == outline_win
+
+    if pos.screencol >= threshold and not is_open then
+      outline.open()
+      hover_opened = true
+    elseif pos.screencol < threshold and is_open and hover_opened and not mouse_in_outline then
+      outline.close()
+      hover_opened = false
+    end
+  end))
+  return '<MouseMove>'
+end, { expr = true })
+
+-- Click-to-jump in outline window
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "Outline",
+  callback = function(ev)
+    vim.keymap.set("n", "<LeftRelease>", "<CR>", { buffer = ev.buf })
+  end,
+})
+
+vim.keymap.set('n', '<leader>o', function()
+  local ok_outline, outline = pcall(require, 'outline')
+  if not ok_outline then return end
+  outline.toggle()
+  hover_opened = false
+end, { desc = 'Toggle outline' })
 
 -- Tab completion (works with nvim-cmp)
 local ok, cmp = pcall(require, "cmp")

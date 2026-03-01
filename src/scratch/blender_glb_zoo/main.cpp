@@ -32,7 +32,7 @@
 #include <vector>
 
 // Template metadata (loaded models)
-struct GlbEntry {
+struct GlbEntry : thing_base {
   std::string name;
   std::string filename;
   std::string fullpath;
@@ -68,7 +68,7 @@ struct GameTraits {
 };
 
 // A spawned instance - has ModelInstance for draw_model_store
-struct GlbInstance {
+struct GlbInstance : thing_base {
   ModelInstance model; // contains model ref + transform
   GameTraits traits;
   float speed = 3.0f;
@@ -243,10 +243,10 @@ struct GlbZoo {
   void unload_all() {
     ModelAPI::unload_all();
     for (auto& ref : entry_refs)
-      entries.pop(ref);
+      entries.remove(ref);
     entry_refs.clear();
     for (auto& ref : instance_refs)
-      instances.pop(ref);
+      instances.remove(ref);
     instance_refs.clear();
     loadedCount = 0;
     selectedIndex = -1;
@@ -257,7 +257,7 @@ struct GlbZoo {
     ModelAPI::unload(name);
     for (auto it = entry_refs.begin(); it != entry_refs.end(); ++it) {
       if (entries[*it].name == name) {
-        entries.pop(*it);
+        entries.remove(*it);
         entry_refs.erase(it);
         break;
       }
@@ -265,7 +265,7 @@ struct GlbZoo {
     // Remove instances using this model
     for (auto it = instance_refs.begin(); it != instance_refs.end();) {
       if (instances[*it].model.name && strcmp(instances[*it].model.name, name.c_str()) == 0) {
-        instances.pop(*it);
+        instances.remove(*it);
         it = instance_refs.erase(it);
       } else {
         ++it;
@@ -310,7 +310,7 @@ struct GlbZoo {
   void despawn(int idx) {
     if (idx < 0 || idx >= (int)instance_refs.size())
       return;
-    instances.pop(instance_refs[idx]);
+    instances.remove(instance_refs[idx]);
     instance_refs.erase(instance_refs.begin() + idx);
     if (selectedInstance >= (int)instance_refs.size())
       selectedInstance = instance_refs.empty() ? -1 : (int)instance_refs.size() - 1;
@@ -318,7 +318,7 @@ struct GlbZoo {
 
   void clear_instances() {
     for (auto& ref : instance_refs)
-      instances.pop(ref);
+      instances.remove(ref);
     instance_refs.clear();
     selectedInstance = -1;
   }

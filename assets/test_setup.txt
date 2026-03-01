@@ -1,0 +1,21 @@
+# Test setup for entity_demo
+# Run with: run assets/test_setup.txt
+
+# Load GLB models from assets
+load "assets/test_glb_output/16x16 Icon1.glb" icon1
+load "assets/test_glb_output/16x16 Icon2.glb" icon2
+load "assets/test_glb_output/16x16 Icon3.glb" icon3
+load "assets/test_glb_output/16x16 Icon4.glb" icon4
+load "assets/test_glb_output/16x16 Icon5.glb" icon5
+
+# Spawn attacker (has CROSS_SLASH action)
+spawn icon1 0 0 0
+
+# Spawn targets (hittable, with HP)
+spawn_target icon2 3 0 0
+spawn_target icon3 -3 0 0
+spawn_target icon4 0 0 3
+spawn_target icon5 3 0 3
+
+list
+models
