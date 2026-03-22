@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en-us">
+<head>
+<meta charset="utf-8">
+<title>GenMesh Heightmap Demo</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; background: #111; color: #ddd; font-family: 'Segoe UI', sans-serif; }
+
+#app {
+    display: flex;
+    height: 100vh;
+    width: 100vw;
+}
+
+/* --- Left panel: painter --- */
+#painter-panel {
+    width: 360px;
+    min-width: 360px;
+    background: #1a1a24;
+    display: flex;
+    flex-direction: column;
+    border-right: 2px solid #333;
+    padding: 10px;
+    gap: 8px;
+    overflow-y: auto;
+}
+
+#painter-panel h2 {
+    font-size: 15px;
+    color: #8af;
+    margin: 0;
+    letter-spacing: 1px;
+}
+
+.tool-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+}
+.tool-row label { min-width: 70px; color: #aaa; }
+.tool-row input[type="range"] { flex: 1; accent-color: #48f; }
+.tool-row .val { min-width: 32px; text-align: right; color: #fff; font-family: monospace; }
+
+.btn-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.btn-row button {
+    padding: 5px 12px;
+    background: #2a2a3e;
+    color: #ccc;
+    border: 1px solid #444;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+}
+.btn-row button:hover { background: #3a3a5e; }
+.btn-row button.active { background: #3060a0; color: #fff; border-color: #5080c0; }
+
+#paint-canvas {
+    width: 340px;
+    height: 340px;
+    border: 2px solid #444;
+    border-radius: 4px;
+    cursor: crosshair;
+    image-rendering: pixelated;
+    background: #000;
+}
+
+#status-bar {
+    font-size: 11px;
+    color: #6a6;
+    font-family: monospace;
+    padding: 4px 0;
+    min-height: 18px;
+}
+
+/* --- Right panel: raylib --- */
+#raylib-panel {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #0d0d14;
+}
+
+canvas#canvas {
+    display: block;
+    border: 0;
+}
+</style>
+</head>
+<body>
+
+<div id="app">
+    <!-- LEFT: Paint widget -->
+    <div id="painter-panel">
+        <h2>HEIGHTMAP PAINTER</h2>
+
+        <div class="tool-row">
+            <label>Mode:</label>
+            <div class="btn-row">
+                <button id="btn-paint" class="active" onclick="setMode('paint')">Paint</button>
+                <button id="btn-erase" onclick="setMode('erase')">Erase</button>
+                <button id="btn-smooth" onclick="setMode('smooth')">Smooth</button>
+            </div>
+        </div>
+
+        <div class="tool-row">
+            <label>Brush:</label>
+            <input type="range" id="brush-size" min="1" max="20" value="4">
+            <span class="val" id="brush-size-val">4</span>
+        </div>
+
+        <div class="tool-row">
+            <label>Strength:</label>
+            <input type="range" id="brush-strength" min="1" max="100" value="30">
+            <span class="val" id="brush-strength-val">30</span>
+        </div>
+
+        <div class="tool-row">
+            <label>Height:</label>
+            <input type="range" id="brush-height" min="0" max="255" value="200">
+            <span class="val" id="brush-height-val">200</span>
+        </div>
+
+        <canvas id="paint-canvas" width="64" height="64"></canvas>
+
+        <div class="btn-row">
+            <button onclick="clearMap()">Clear</button>
+            <button onclick="fillFlat(128)">Flat 50%</button>
+            <button onclick="randomNoise()">Noise</button>
+            <button onclick="diamondSquare()">Diamond-Sq</button>
+        </div>
+
+        <div class="tool-row">
+            <label>Render:</label>
+            <div class="btn-row">
+                <button id="btn-tiles" class="active" onclick="setRenderMode(0)">Tiles</button>
+                <button id="btn-solid" onclick="setRenderMode(1)">Solid Mesh</button>
+            </div>
+        </div>
+
+        <div id="status-bar">Waiting for WASM...</div>
+    </div>
+
+    <!-- RIGHT: Raylib 3D view -->
+    <div id="raylib-panel">
+        <canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+    </div>
+</div>
+
+<script>
+// --- Painter state ---
+var MAP_SIZE = 64;
+var heightData = new Uint8Array(MAP_SIZE * MAP_SIZE);
+var paintCanvas = document.getElementById('paint-canvas');
+var paintCtx = paintCanvas.getContext('2d');
+var painting = false;
+var currentMode = 'paint';
+var wasmReady = false;
+
+// --- UI binding ---
+var brushSizeSlider    = document.getElementById('brush-size');
+var brushStrengthSlider= document.getElementById('brush-strength');
+var brushHeightSlider  = document.getElementById('brush-height');
+
+brushSizeSlider.oninput = function() { document.getElementById('brush-size-val').textContent = this.value; };
+brushStrengthSlider.oninput = function() { document.getElementById('brush-strength-val').textContent = this.value; };
+brushHeightSlider.oninput = function() { document.getElementById('brush-height-val').textContent = this.value; };
+
+function setMode(m) {
+    currentMode = m;
+    document.getElementById('btn-paint').classList.toggle('active', m === 'paint');
+    document.getElementById('btn-erase').classList.toggle('active', m === 'erase');
+    document.getElementById('btn-smooth').classList.toggle('active', m === 'smooth');
+}
+
+function setRenderMode(mode) {
+    if (!wasmReady) return;
+    Module._js_set_render_mode(mode);
+    if (mode === 1) Module._js_rebuild_mesh(); // trigger solid mesh build
+    document.getElementById('btn-tiles').classList.toggle('active', mode === 0);
+    document.getElementById('btn-solid').classList.toggle('active', mode === 1);
+}
+
+// --- Paint on the canvas ---
+function canvasToGrid(e) {
+    var rect = paintCanvas.getBoundingClientRect();
+    var scaleX = MAP_SIZE / rect.width;
+    var scaleY = MAP_SIZE / rect.height;
+    return {
+        x: (e.clientX - rect.left) * scaleX,
+        y: (e.clientY - rect.top)  * scaleY
+    };
+}
+
+function applyBrush(cx, cy) {
+    var radius = parseInt(brushSizeSlider.value);
+    var strength = parseInt(brushStrengthSlider.value) / 100.0;
+    var targetH = parseInt(brushHeightSlider.value);
+    var changed = false;
+
+    for (var dy = -radius; dy <= radius; dy++) {
+        for (var dx = -radius; dx <= radius; dx++) {
+            var dist = Math.sqrt(dx*dx + dy*dy);
+            if (dist > radius) continue;
+
+            var px = Math.floor(cx + dx);
+            var py = Math.floor(cy + dy);
+            if (px < 0 || px >= MAP_SIZE || py < 0 || py >= MAP_SIZE) continue;
+
+            var idx = py * MAP_SIZE + px;
+            var falloff = 1.0 - (dist / radius);
+            var s = strength * falloff;
+
+            if (currentMode === 'paint') {
+                heightData[idx] = Math.min(255, Math.max(0,
+                    Math.round(heightData[idx] + (targetH - heightData[idx]) * s)));
+                changed = true;
+            } else if (currentMode === 'erase') {
+                heightData[idx] = Math.min(255, Math.max(0,
+                    Math.round(heightData[idx] * (1.0 - s))));
+                changed = true;
+            } else if (currentMode === 'smooth') {
+                // Average neighbors
+                var sum = 0, count = 0;
+                for (var sy = -1; sy <= 1; sy++) {
+                    for (var sx = -1; sx <= 1; sx++) {
+                        var nx = px + sx, ny = py + sy;
+                        if (nx >= 0 && nx < MAP_SIZE && ny >= 0 && ny < MAP_SIZE) {
+                            sum += heightData[ny * MAP_SIZE + nx];
+                            count++;
+                        }
+                    }
+                }
+                var avg = sum / count;
+                heightData[idx] = Math.round(heightData[idx] + (avg - heightData[idx]) * s);
+                changed = true;
+            }
+        }
+    }
+
+    if (changed) {
+        renderPaintCanvas();
+        pushToWasm();
+    }
+}
+
+// --- Render the heightmap to the paint canvas ---
+function renderPaintCanvas() {
+    var imgData = paintCtx.createImageData(MAP_SIZE, MAP_SIZE);
+    for (var i = 0; i < MAP_SIZE * MAP_SIZE; i++) {
+        var v = heightData[i];
+        var idx = i * 4;
+        // Color ramp matching the C side
+        var t = v / 255.0;
+        if (t < 0.05) {
+            imgData.data[idx+0] = 40;  imgData.data[idx+1] = 80;  imgData.data[idx+2] = 160;
+        } else if (t < 0.3) {
+            var s = (t - 0.05) / 0.25;
+            imgData.data[idx+0] = Math.round(40 + s*60);
+            imgData.data[idx+1] = Math.round(120 + s*60);
+            imgData.data[idx+2] = 40;
+        } else if (t < 0.7) {
+            var s = (t - 0.3) / 0.4;
+            imgData.data[idx+0] = Math.round(100 + s*60);
+            imgData.data[idx+1] = Math.round(80 + s*20);
+            imgData.data[idx+2] = Math.round(40 + s*20);
+        } else {
+            var s = (t - 0.7) / 0.3;
+            imgData.data[idx+0] = Math.round(160 + s*95);
+            imgData.data[idx+1] = Math.round(160 + s*95);
+            imgData.data[idx+2] = Math.round(160 + s*95);
+        }
+        imgData.data[idx+3] = 255;
+    }
+    paintCtx.putImageData(imgData, 0, 0);
+}
+
+// --- Push heightmap data to WASM memory ---
+function pushToWasm() {
+    if (!wasmReady) return;
+    try {
+        for (var y = 0; y < MAP_SIZE; y++) {
+            for (var x = 0; x < MAP_SIZE; x++) {
+                Module._js_set_pixel(x, y, heightData[y * MAP_SIZE + x]);
+            }
+        }
+        Module._js_rebuild_mesh();
+    } catch(e) {
+        console.error('pushToWasm error:', e);
+    }
+}
+
+// --- Preset generators ---
+function clearMap() {
+    heightData.fill(0);
+    renderPaintCanvas();
+    pushToWasm();
+}
+
+function fillFlat(v) {
+    heightData.fill(v);
+    renderPaintCanvas();
+    pushToWasm();
+}
+
+function randomNoise() {
+    for (var i = 0; i < heightData.length; i++) {
+        heightData[i] = Math.floor(Math.random() * 256);
+    }
+    // Smooth a few passes
+    for (var pass = 0; pass < 3; pass++) {
+        var copy = new Uint8Array(heightData);
+        for (var y = 1; y < MAP_SIZE - 1; y++) {
+            for (var x = 1; x < MAP_SIZE - 1; x++) {
+                var sum = copy[(y-1)*MAP_SIZE+x] + copy[(y+1)*MAP_SIZE+x]
+                        + copy[y*MAP_SIZE+x-1] + copy[y*MAP_SIZE+x+1]
+                        + copy[y*MAP_SIZE+x];
+                heightData[y * MAP_SIZE + x] = Math.round(sum / 5);
+            }
+        }
+    }
+    renderPaintCanvas();
+    pushToWasm();
+}
+
+function diamondSquare() {
+    // Simple diamond-square for power-of-2+1 grids. MAP_SIZE=64 isn't ideal, so we use 65 and trim.
+    var N = 65;
+    var grid = new Float32Array(N * N);
+    // Seed corners
+    grid[0] = Math.random();
+    grid[N - 1] = Math.random();
+    grid[(N-1)*N] = Math.random();
+    grid[(N-1)*N + N - 1] = Math.random();
+
+    var step = N - 1;
+    var scale = 0.5;
+    while (step > 1) {
+        var half = step >> 1;
+        // Diamond
+        for (var y = half; y < N; y += step) {
+            for (var x = half; x < N; x += step) {
+                var avg = (grid[(y-half)*N + (x-half)] + grid[(y-half)*N + (x+half)]
+                         + grid[(y+half)*N + (x-half)] + grid[(y+half)*N + (x+half)]) / 4;
+                grid[y*N + x] = avg + (Math.random() - 0.5) * scale;
+            }
+        }
+        // Square
+        for (var y = 0; y < N; y += half) {
+            for (var x = ((y / half) % 2 === 0 ? half : 0); x < N; x += step) {
+                var sum = 0, cnt = 0;
+                if (y - half >= 0) { sum += grid[(y-half)*N+x]; cnt++; }
+                if (y + half < N)  { sum += grid[(y+half)*N+x]; cnt++; }
+                if (x - half >= 0) { sum += grid[y*N+x-half]; cnt++; }
+                if (x + half < N)  { sum += grid[y*N+x+half]; cnt++; }
+                grid[y*N+x] = sum/cnt + (Math.random() - 0.5) * scale;
+            }
+        }
+        step = half;
+        scale *= 0.5;
+    }
+
+    // Normalize and copy to heightData (64x64 from 65x65)
+    var min = Infinity, max = -Infinity;
+    for (var i = 0; i < N*N; i++) { min = Math.min(min, grid[i]); max = Math.max(max, grid[i]); }
+    var range = max - min || 1;
+    for (var y = 0; y < MAP_SIZE; y++) {
+        for (var x = 0; x < MAP_SIZE; x++) {
+            heightData[y*MAP_SIZE+x] = Math.round(((grid[y*N+x] - min) / range) * 255);
+        }
+    }
+    renderPaintCanvas();
+    pushToWasm();
+}
+
+// --- Mouse events on paint canvas ---
+paintCanvas.addEventListener('mousedown', function(e) {
+    if (e.button === 0) {
+        painting = true;
+        var p = canvasToGrid(e);
+        applyBrush(p.x, p.y);
+    }
+});
+paintCanvas.addEventListener('mousemove', function(e) {
+    if (painting) {
+        var p = canvasToGrid(e);
+        applyBrush(p.x, p.y);
+    }
+});
+paintCanvas.addEventListener('mouseup', function(e) { painting = false; });
+paintCanvas.addEventListener('mouseleave', function(e) { painting = false; });
+
+// Prevent context menu on paint canvas
+paintCanvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+
+// --- C -> JS callback ---
+window.updateStatusFromC = function(msg) {
+    document.getElementById('status-bar').textContent = msg;
+    if (msg === 'Raylib ready') {
+        wasmReady = true;
+        // Get actual map size from C
+        MAP_SIZE = Module._js_get_map_size();
+        pushToWasm();
+    }
+};
+
+// Initial render
+renderPaintCanvas();
+</script>
+
+{{{ SCRIPT }}}
+</body>
+</html>
