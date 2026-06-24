@@ -6,6 +6,7 @@ extern "C" {
 #include <lualib.h>
 }
 
+#include "animation_registry.hpp"
 #include <string>
 
 // Forward declarations — the game must define these before including lua_api.hpp
@@ -18,7 +19,7 @@ inline lua_State* L = nullptr;
 
 // ---- Lua C functions ----
 
-// spawn(model_name, x, y, z, [scale])
+// spawn(model_name, x, y, z, [scale]) -> entity index, or -1 on failure
 static int l_spawn(lua_State* L) {
   const char* model = luaL_checkstring(L, 1);
   float x = (float)luaL_optnumber(L, 2, 0);
@@ -28,10 +29,21 @@ static int l_spawn(lua_State* L) {
 
   auto ref = GameCtxAPI::spawn(
       GameCtxAPI::SpawnArgs{.model_name = std::string(model), .pos = {x, y, z}, .scale = scale});
-  lua_pushboolean(L, ref.kind != ilist_kind::nil);
+
+  if (ref.kind == ilist_kind::nil) {
+    lua_pushinteger(L, -1);
+    return 1;
+  }
+  // find the positional index of the new entity (same counting scheme set_flag/trait_add use)
+  int idx = 0;
+  for (auto& e : GameCtxAPI::ctx.entities) {
+    if (e.this_ref() == ref)
+      break;
+    idx++;
+  }
+  lua_pushinteger(L, idx);
   return 1;
 }
-
 // spawn_child(parent_index, model_name, x, y, z, [scale])
 static int l_spawn_child(lua_State* L) {
   int parent_idx = (int)luaL_checkinteger(L, 1);
@@ -207,7 +219,7 @@ static int l_color(lua_State* L) {
 
 // set_flag(entity_index, flag_name, value)
 static int l_set_flag(lua_State* L) {
-  int idx = (int)luaL_checkinteger(L, 1);
+  int idx = (int)luaL_checkinteger(L, 1); // is this not the id? what the fuck I mea index
   const char* flag = luaL_checkstring(L, 2);
   bool val = lua_toboolean(L, 3);
 
@@ -231,6 +243,73 @@ static int l_set_flag(lua_State* L) {
     i++;
   }
   lua_pushboolean(L, false);
+  return 1;
+}
+
+// register_animation(name, dir_path, frame_duration)
+static int l_register_animation(lua_State* L) {
+  const char* name = luaL_checkstring(L, 1);
+  const char* dir_path = luaL_checkstring(L, 2);
+  float frame_duration = (float)luaL_checknumber(L, 3);
+  int id =
+      AnimationRegistry::register_anim(std::string(name), std::string(dir_path), frame_duration);
+  if (id < 0)
+    GameConsoleAPI::print("lua: register_animation: no frames found in " + std::string(dir_path));
+  lua_pushinteger(L, id);
+  return 1;
+}
+
+// spawn_animation(anim_name, x, y, z, [scale], [looping])
+static int l_spawn_animation(lua_State* L) {
+  const char* anim_name = luaL_checkstring(L, 1);
+  float x = (float)luaL_optnumber(L, 2, 0);
+  float y = (float)luaL_optnumber(L, 3, 0);
+  float z = (float)luaL_optnumber(L, 4, 0);
+  float scale = (float)luaL_optnumber(L, 5, 1.0);
+  bool looping = lua_toboolean(L, 6);
+
+  int anim_id = AnimationRegistry::find(std::string(anim_name));
+  if (anim_id < 0) {
+    GameConsoleAPI::print("lua: spawn_animation: unknown animation: " + std::string(anim_name));
+    lua_pushboolean(L, false);
+    return 1;
+  }
+
+  // animation entities use TRAIT_NO_MODEL — they draw via texture, not model
+  auto ref = GameCtxAPI::spawn(GameCtxAPI::SpawnArgs{
+      .model_name = TRAIT_NO_MODEL, .pos = {x, y, z}, .scale = scale, .debug_name = "animation"});
+  if (ref.kind == ilist_kind::nil) {
+    lua_pushboolean(L, false);
+    return 1;
+  }
+
+  auto& ent = GameCtxAPI::ctx.entities[ref];
+  ent.animation_id = anim_id;
+  TraitAPI::apply(ent, TRAIT_IS_ANIMATION);
+
+  if (looping)
+    TraitAPI::apply(ent, TRAIT_IS_LOOPING);
+
+  lua_pushboolean(L, true);
+  return 1;
+}
+
+// set_click_animation(anim_name) — set a 2d animation to play on click, or nil to disable
+static int l_set_click_animation(lua_State* L) {
+  if (lua_isnil(L, 1) || lua_isnone(L, 1)) {
+    GameCtxAPI::ctx.click_2d_animation = -1;
+    lua_pushboolean(L, true);
+    return 1;
+  }
+  const char* anim_name = luaL_checkstring(L, 1);
+  int anim_id = AnimationRegistry::find(std::string(anim_name));
+  if (anim_id < 0) {
+    GameConsoleAPI::print("lua: set_click_animation: unknown animation: " + std::string(anim_name));
+    lua_pushboolean(L, false);
+    return 1;
+  }
+  GameCtxAPI::ctx.click_2d_animation = anim_id;
+  lua_pushboolean(L, true);
   return 1;
 }
 
@@ -260,6 +339,9 @@ inline void init() {
   lua_register(L, "color", l_color);
   lua_register(L, "set_flag", l_set_flag);
   lua_register(L, "clear", l_clear);
+  lua_register(L, "register_animation", l_register_animation);
+  lua_register(L, "spawn_animation", l_spawn_animation);
+  lua_register(L, "set_click_animation", l_set_click_animation);
 }
 
 inline void shutdown() {

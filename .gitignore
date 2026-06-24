@@ -22,3 +22,16 @@ __pycache__/
 
 # Generated docs (built by GitHub Actions)
 docs/
+
+# Emscripten/web build output
+build_web/
+
+# Binary assets / generated web builds (kept local, not in git)
+*.html
+*.png
+*.blend
+*.blend1
+*.zip
+*.glb
+*.bin
+*.gltf

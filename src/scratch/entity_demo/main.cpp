@@ -13,8 +13,9 @@ exit
 // ============================================================================
 // INCLUDES
 // ============================================================================
+#include "../../mylibs/animation_registry.hpp"
 #include "../../mylibs/game_console_api.hpp"
-#include "../../mylibs/ilist.hpp"
+#include "../../mylibs/ilist.hpp" // I think I named this ilist for intrusive list
 #include "../../mylibs/model_api.hpp"
 #include "../../mylibs/render_api.hpp"
 #include <array>
@@ -27,6 +28,7 @@ exit
 
 // ============================================================================
 // Unset Sentinel Helpers
+// - used to detect unset values
 // ============================================================================
 
 template <typename T> constexpr T make_unset() {
@@ -61,6 +63,9 @@ enum class RenderLayerEnum { RENDER_LAYER_0, RENDER_LAYER_1, RENDER_LAYER_2, REN
 #define TRAIT_IS_PUSHABLE "is_pushable"
 #define TRAIT_NO_MODEL "no-model"
 #define TRAIT_IS_BILLBOARD "is_billboard"
+#define TRAIT_IS_ANIMATION "is_animation"
+#define TRAIT_IS_LOOPING "is_looping"
+
 // ============================================================================
 // Entity
 // ============================================================================
@@ -92,6 +97,12 @@ struct Entity : thing_base {
 
   thing_ref spawner = make_unset<thing_ref>();
   std::array<char, 128> log_text = {};
+
+  // animation
+  int animation_id = -1;
+  float animation_start_time = 0.0f;
+  float animation_speed = 1.0f;
+
   void* traits[MAX_TRAITS] = {};
   /** @brief Implicit conversion to ModelInstance reference. */
   operator ModelInstance&() { return model; }
@@ -177,6 +188,10 @@ struct State {
     float fade_time_sec = 5.0f;
   } log_layout;
 
+  int click_2d_animation = -1; // animation id to spawn on click (-1 = none)
+  float click_anim_speed = 1.0f;
+  float click_anim_scale = 1.0f;
+
   FrameBuffer frame_buffer;
 };
 
@@ -203,7 +218,7 @@ inline void spawn_label(const char* text, thing_ref spawner = thing_ref::get_nil
   ent.life_time = ctx.log_layout.fade_time_sec;
   ent._debug_name = "log_text";
   ent.spawner = spawner;
-  ent.parent_offset = {0, 1.5f, 0};
+  // ent.parent_offset = {0, 1.5f, 0};
   thing_ref ref = ctx.entities.add(ent);
   TraitAPI::apply(ctx.entities[ref], TRAIT_IS_TEXT);
 }
@@ -230,7 +245,7 @@ inline BoundingBox compute_world_bbox(const Entity& e) {
  * @brief Build the world transform matrix for an entity.
  * @param e The entity.
  * @param s Override scale; uses entity scale if <= 0.
- * @return Combined scale * rotation * translation matrix.
+ * @return Combined scale * rotation * translateon matrix.
  */
 inline Matrix entity_transform(const Entity& e, float s = 0) {
   if (s <= 0)
@@ -328,9 +343,10 @@ struct SpawnArgs {
  * @return Reference to the spawned entity, or nil on failure.
  */
 inline thing_ref spawn(const SpawnArgs& args) {
-  ModelInstance inst = ModelAPI::instance(args.model_name);
+  bool no_model = (args.model_name == TRAIT_NO_MODEL);
+  ModelInstance inst = no_model ? ModelInstance{} : ModelAPI::instance(args.model_name);
 
-  if (!inst.valid())
+  if (!no_model && !inst.valid())
     return {};
   Entity ent = {};
   ent.model = inst;
@@ -454,7 +470,7 @@ inline void handle_pair(Entity& a, Entity& b) {
     GameConsoleAPI::print(std::string("cross slash hit ") +
                           (b.model.valid() ? b.model.name : "???"));
     spawn_label(TextFormat("cross slash hit %s", b.model.valid() ? b.model.name : "???"),
-                b.this_ref());
+                a.this_ref());
     TraceLog(LOG_INFO, "cross slash hit %s", b._debug_name);
   }
 
@@ -583,7 +599,8 @@ inline void update() {
 
   //
   //   traits update
-  //
+  // NOTE: Im pretty sure that I decited against entity wise uptdates and that If I removed this
+  // nothing would change
 
   TraitAPI::tick_all(ctx.entities);
 
@@ -666,6 +683,54 @@ inline void update() {
   }
 
   //
+  // click to spawn 2d animation
+  //
+
+  if (!ImGui::GetIO().WantCaptureMouse && IsMouseButtonReleased(MOUSE_BUTTON_LEFT) &&
+      ctx.click_2d_animation >= 0) {
+    // raycast to y=0 ground plane
+    if (frame.mouse_ray.direction.y !=
+        0) { // TODO: I have code quality conernes here. Im pretty sure if I thought about it that
+             // the order of checks is is causing undessary checks
+      float t = -frame.mouse_ray.position.y / frame.mouse_ray.direction.y;
+      if (t > 0) {
+        Vector3 hit =
+            Vector3Add(frame.mouse_ray.position, Vector3Scale(frame.mouse_ray.direction, t));
+        auto ref = spawn({.model_name = TRAIT_NO_MODEL,
+                          .pos = hit,
+                          .scale = ctx.click_anim_scale,
+                          .debug_name = "click_anim"});
+        if (ref.kind !=
+            ilist_kind::nil) { // the fact there is a explicit nil check here. is a bad omen
+          auto& ent = ctx.entities[ref];
+          ent.animation_id = ctx.click_2d_animation;
+          ent.animation_speed = ctx.click_anim_speed;
+          const auto* def = AnimationRegistry::get(ctx.click_2d_animation);
+          if (def)
+            ent.life_time =
+                (def->frame_duration / ctx.click_anim_speed) * (float)def->frames.size();
+          TraitAPI::apply(ent, TRAIT_IS_ANIMATION);
+        }
+      }
+    }
+  }
+
+  //
+  // ui logic
+  //
+
+  /*
+   * for ent in ents
+   * if e is button
+   * if e is in hoverd
+   * if e is in clicked down # depressed
+   * if e is in clicked up
+   * i would assume that there is call for a function pointer to what the thing should
+   * do in this event
+
+   */
+
+  //
   //  render
   //
 
@@ -713,6 +778,29 @@ inline void update() {
 
   RenderAPI::rasterize();
 
+  //
+  // draw animated texture entities
+  //
+
+  for (auto& e : ctx.entities) {
+    if (!TraitAPI::has(e, TRAIT_IS_ANIMATION) || e.animation_id < 0)
+      continue;
+    float elapsed = ((float)GetTime() - e.animation_start_time) * e.animation_speed;
+
+    bool looping = TraitAPI::has(
+        e, TRAIT_IS_LOOPING); // how the fuck does it get is looping? is this a dynamic trait?
+
+    Texture2D* tex = AnimationRegistry::get_frame(e.animation_id, elapsed, looping);
+    if (!tex)
+      continue;
+    Vector2 screen = GetWorldToScreen(e.position, ctx.camera);
+    float draw_size = e.scale * 64.0f; // scale factor to screen pixels
+    Rectangle src = {0, 0, (float)tex->width, (float)tex->height};
+    Rectangle dst = {screen.x - draw_size * 0.5f, screen.y - draw_size * 0.5f, draw_size,
+                     draw_size};
+    DrawTexturePro(*tex, src, dst, {0, 0}, 0.0f, WHITE);
+  }
+
   for (auto& e : ctx.entities) {
     if (!TraitAPI::has(e, TRAIT_IS_TEXT))
       continue;
@@ -729,9 +817,18 @@ inline void update() {
 inline void draw_imgui() {
   rlImGuiBegin();
   if (ImGui::Begin("Scene")) {
+
+    //
+    // scene counts header
+    //
+
     ImGui::Text("Entities: %zu", entity_count());
     ImGui::Text("Models: %zu", ModelAPI::count());
     ImGui::Separator();
+
+    //
+    // model spawn list
+    //
 
     if (ImGui::CollapsingHeader("Models", ImGuiTreeNodeFlags_DefaultOpen)) {
       for (const auto& name : ModelAPI::names()) {
@@ -741,6 +838,10 @@ inline void draw_imgui() {
         ImGui::Text("(click to spawn)");
       }
     }
+
+    //
+    // entity selectable list
+    //
 
     if (ImGui::CollapsingHeader("Entities", ImGuiTreeNodeFlags_DefaultOpen)) {
       int idx = 0;
@@ -758,6 +859,10 @@ inline void draw_imgui() {
       }
     }
 
+    //
+    // selected entity properties
+    //
+
     if (auto& sel = ctx.entities[ctx.selected]) {
       ImGui::Separator();
       ImGui::Text("Selected: %s", sel.model.valid() ? sel.model.name : "---");
@@ -765,12 +870,10 @@ inline void draw_imgui() {
       ImGui::DragFloat3("Position", &sel.position.x, 0.1f);
       ImGui::DragFloat3("Rotation", &sel.rotation.x, 0.01f);
       ImGui::DragFloat("Scale", &sel.scale, 0.1f, 0.1f, 10.0f);
-
       ImGui::Separator();
       bool visible = sel.render.visible;
       if (ImGui::Checkbox("Visible", &visible))
         sel.render.visible = visible;
-
       ImGui::Separator();
       if (ImGui::Button("Delete")) {
         ctx.entities.remove(ctx.selected);
@@ -778,18 +881,113 @@ inline void draw_imgui() {
       }
     }
 
+    //
+    // trait registry view
+    //
+
     if (ImGui::CollapsingHeader("Trait Registry")) {
       ImGui::TextUnformatted(TraitAPI::debug_registered().c_str());
     }
+
+    //
+    // click animation picker
+    // NOTE: generated coments here are wrong, there is only one animation
+
+    if (ImGui::CollapsingHeader("Click Animation", ImGuiTreeNodeFlags_DefaultOpen)) {
+      if (ctx.click_2d_animation >= 0) {
+        const auto* def = AnimationRegistry::get(ctx.click_2d_animation);
+        ImGui::Text("Active: %s", def ? def->name.c_str() : "???");
+        if (ImGui::Button("Disable"))
+          ctx.click_2d_animation = -1;
+      } else {
+        ImGui::Text("Active: none");
+        // list registered animations to pick from
+        for (int i = 0; i < (int)AnimationRegistry::animations.size(); i++) {
+          if (ImGui::Button(AnimationRegistry::animations[i].name.c_str()))
+            ctx.click_2d_animation = i;
+          ImGui::SameLine();
+          ImGui::Text("(%d frames)", (int)AnimationRegistry::animations[i].frames.size());
+        }
+      }
+      ImGui::DragFloat("Speed", &ctx.click_anim_speed, 0.1f, 0.1f, 10.0f);
+      ImGui::DragFloat("Size", &ctx.click_anim_scale, 0.1f, 0.1f, 10.0f);
+    }
   }
   ImGui::End();
+
+  //
+  // game console + frame end
+  //
+
   GameConsoleAPI::draw_imgui();
   rlImGuiEnd();
+}
+
+// ============================================================================
+// CRPG camera -- WASD pans along the ground, right-drag orbits the target
+// (Baldur's Gate-style). Drop-in replacement for UpdateCamera(.., CAMERA_FREE).
+// ============================================================================
+inline void update_crpg_camera(Camera3D& cam) {
+  float dt = GetFrameTime();
+
+  // tweakables
+  const float pan_speed = 10.0f;   // world units / second
+  const float orbit_sens = 0.005f; // radians / pixel of mouse drag
+
+  //
+  // WASD pan: slide camera + target together across the ground plane
+  //
+  Vector3 forward = Vector3Subtract(cam.target, cam.position);
+  forward.y = 0.0f;
+  forward = Vector3Normalize(forward);
+  Vector3 right = Vector3Normalize(Vector3CrossProduct(forward, {0.0f, 1.0f, 0.0f}));
+
+  Vector3 move = {0.0f, 0.0f, 0.0f};
+  if (IsKeyDown(KEY_W))
+    move = Vector3Add(move, forward);
+  if (IsKeyDown(KEY_S))
+    move = Vector3Subtract(move, forward);
+  if (IsKeyDown(KEY_D))
+    move = Vector3Add(move, right);
+  if (IsKeyDown(KEY_A))
+    move = Vector3Subtract(move, right);
+  if (Vector3Length(move) > 0.0f) {
+    move = Vector3Scale(Vector3Normalize(move), pan_speed * dt);
+    cam.position = Vector3Add(cam.position, move);
+    cam.target = Vector3Add(cam.target, move);
+  }
+
+  //
+  // right-drag orbit: rotate camera around the target (yaw + clamped pitch)
+  //
+  if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT) && !ImGui::GetIO().WantCaptureMouse) {
+    Vector2 d = GetMouseDelta();
+    Vector3 offset = Vector3Subtract(cam.position, cam.target);
+    float radius = Vector3Length(offset);
+
+    float yaw = atan2f(offset.x, offset.z) - d.x * orbit_sens;
+    float pitch = asinf(offset.y / radius) - d.y * orbit_sens;
+
+    // clamp pitch: stay above ground, below straight-down (no pole flip)
+    const float pitch_min = 0.05f; // ~3 deg above horizon
+    const float pitch_max = 1.45f; // ~83 deg, near top-down
+    if (pitch < pitch_min)
+      pitch = pitch_min;
+    if (pitch > pitch_max)
+      pitch = pitch_max;
+
+    offset.x = radius * cosf(pitch) * sinf(yaw);
+    offset.y = radius * sinf(pitch);
+    offset.z = radius * cosf(pitch) * cosf(yaw);
+    cam.position = Vector3Add(cam.target, offset);
+  }
 }
 
 } // namespace GameCtxAPI
 
 #include "traits.inc"
+
+#include "my_gltf_utils.hpp"
 
 // ============================================================================
 // Lua API
@@ -813,6 +1011,10 @@ int main() {
 
   LuaAPI::init();
 
+  // TODO: the second I saw this i got annoyed, why the fuck is this not some config file
+  //
+  //
+
   TraitAPI::register_trait(TRAIT_WSAD, wsad_init, wsad_update);
 
   TraitAPI::register_trait(TRAIT_PICKUP, pickup_init, pickup_update);
@@ -829,16 +1031,24 @@ int main() {
 
   TraitAPI::register_trait("is_billboard");
 
-  // how do I make a frame around all the items in game?
+  TraitAPI::register_trait(TRAIT_IS_ANIMATION, animation_init, animation_update);
+
+  TraitAPI::register_trait(TRAIT_IS_LOOPING);
 
   GameConsoleAPI::print("Press ~ for console.");
+
+  // this should become an arg the to main loop,
+  // then in each lua file I could just run the lua file
+
   LuaAPI::run_file("assets/setup.lua");
 
   while (!WindowShouldClose()) {
+
     if (IsKeyPressed(KEY_GRAVE))
       GameConsoleAPI::toggle_visible();
+
     if (!GameConsoleAPI::visible())
-      UpdateCamera(&GameCtxAPI::ctx.camera, CAMERA_FREE);
+      GameCtxAPI::update_crpg_camera(GameCtxAPI::ctx.camera);
 
     BeginDrawing();
     ClearBackground(DARKGRAY);
@@ -850,6 +1060,7 @@ int main() {
 
   LuaAPI::shutdown();
   GameCtxAPI::clear_entities();
+  AnimationRegistry::unload_all();
   RenderAPI::shutdown();
   ModelAPI::unload_all();
   rlImGuiShutdown();

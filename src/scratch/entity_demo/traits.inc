@@ -57,3 +57,15 @@ void pickup_update(void* ptr) {
 void is_text_update(void* ptr) {
   (void)ptr;
 }
+
+// ============================================================================
+// Trait: is_animation
+// ============================================================================
+void animation_init(void* ptr) {
+  auto& e = *(Entity*)ptr;
+  e.animation_start_time = (float)GetTime();
+}
+
+void animation_update(void* ptr) {
+  (void)ptr; // drawing handled in render loop
+}

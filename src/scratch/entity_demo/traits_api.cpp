@@ -30,6 +30,10 @@ struct State {
 inline State state;
 
 inline int register_trait(const char* name, InitFn init = nullptr, UpdateFn update = nullptr) {
+  // there is a vector of traits. and some max traits.
+  // when you register a trait, it defines the slot of the trait for the runtime.
+  // .... I just need to hard generate this with python
+
   for (auto& e : state.entries) {
     if (strcmp(e.name, name) == 0)
       return e.slot;
