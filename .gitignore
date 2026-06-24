@@ -35,3 +35,6 @@ build_web/
 *.glb
 *.bin
 *.gltf
+
+# ...but keep Emscripten shell templates (build inputs, not generated output)
+!**/src/shell.html

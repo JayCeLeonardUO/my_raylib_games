@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en-us">
+<head>
+<meta charset="utf-8">
+<title>GLB Viewer</title>
+<style>
+  body { margin: 0; padding: 0; background: #222; }
+  canvas { border: 0; display: block; margin: 0 auto; }
+</style>
+</head>
+<body>
+<canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex=-1></canvas>
+<script>
+(function() {
+    window.__GLB_JSON = null;
+    window.__GLB_JSON_STR = "";
+
+    if (typeof window.__GLB_DATA !== 'string' || window.__GLB_DATA.length === 0) {
+        window.__GLB_BYTES = null;
+        return;
+    }
+
+    // Decode base64 to Uint8Array
+    var raw = atob(window.__GLB_DATA);
+    var uint8 = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) uint8[i] = raw.charCodeAt(i);
+    window.__GLB_BYTES = uint8;
+    window.__GLB_DATA = null;
+
+    // Parse GLB header and extract JSON chunk
+    if (uint8.length >= 20) {
+        var view = new DataView(uint8.buffer);
+        var magic = view.getUint32(0, true);
+        if (magic === 0x46546C67) { // 'glTF'
+            var chunk0Len = view.getUint32(12, true);
+            var chunk0Type = view.getUint32(16, true);
+            if (chunk0Type === 0x4E4F534A) { // 'JSON'
+                var jsonBytes = uint8.slice(20, 20 + chunk0Len);
+                var jsonStr = new TextDecoder().decode(jsonBytes);
+                try {
+                    window.__GLB_JSON = JSON.parse(jsonStr);
+                    window.__GLB_JSON_STR = jsonStr;
+                } catch(e) {
+                    console.error("Failed to parse GLB JSON:", e);
+                }
+            }
+        }
+    }
+})();
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

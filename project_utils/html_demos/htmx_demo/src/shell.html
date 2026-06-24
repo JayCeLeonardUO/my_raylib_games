@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en-us">
+<head>
+<meta charset="utf-8">
+<title>htmx + raylib demo</title>
+<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+<style>
+  body { margin: 0; padding: 0; background: #1a1a2e; color: #eee; font-family: sans-serif; }
+  #ui { padding: 12px; display: flex; gap: 12px; align-items: center; border-bottom: 1px solid #333; }
+  #ui button { padding: 8px 16px; background: #0f3460; color: #eee; border: 1px solid #555; border-radius: 4px; cursor: pointer; }
+  #ui button:hover { background: #16213e; }
+  #status { padding: 4px 12px; font-family: monospace; font-size: 13px; color: #0f0; background: #000; border-bottom: 1px solid #333; }
+  #htmx-output { padding: 8px 12px; font-family: monospace; font-size: 13px; color: #ff0; min-height: 20px; border-bottom: 1px solid #333; }
+  canvas { border: 0; display: block; margin: 0 auto; }
+</style>
+</head>
+<body>
+
+<!-- HTMX-driven UI above the canvas -->
+<div id="ui">
+  <button onclick="callC_setColor(1)">Red</button>
+  <button onclick="callC_setColor(2)">Green</button>
+  <button onclick="callC_setColor(3)">Blue</button>
+  <button onclick="callC_toggleSpin()">Toggle Spin</button>
+  <button onclick="callC_getState()">Get C State</button>
+</div>
+<div id="status">Waiting for Raylib...</div>
+<div id="htmx-output"></div>
+
+<canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex=-1></canvas>
+
+<script>
+// JS -> C: call exported C functions
+function callC_setColor(colorId) {
+    if (typeof Module._js_set_color === 'function') {
+        Module._js_set_color(colorId);
+        document.getElementById('status').textContent = 'Set color to: ' + ['?','RED','GREEN','BLUE'][colorId];
+    } else {
+        document.getElementById('status').textContent = 'C function not ready yet';
+    }
+}
+
+function callC_toggleSpin() {
+    if (typeof Module._js_toggle_spin === 'function') {
+        Module._js_toggle_spin();
+        document.getElementById('status').textContent = 'Toggled spin';
+    }
+}
+
+function callC_getState() {
+    if (typeof Module._js_get_angle === 'function' && typeof Module._js_get_color === 'function') {
+        var angle = Module._js_get_angle();
+        var color = Module._js_get_color();
+        var names = ['?','RED','GREEN','BLUE'];
+        document.getElementById('htmx-output').textContent =
+            'C state -> angle: ' + angle.toFixed(2) + ', color: ' + names[color];
+    }
+}
+
+// C -> JS: this function is called from C via EM_JS
+window.updateStatusFromC = function(msg) {
+    document.getElementById('status').textContent = msg;
+};
+</script>
+
+{{{ SCRIPT }}}
+</body>
+</html>

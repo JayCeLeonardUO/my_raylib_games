@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en-us">
+<head>
+<meta charset="utf-8">
+<title>glb viewer</title>
+<style>
+  body { margin: 0; padding: 0; background: #111; color: #0f0; font-family: monospace; font-size: 12px; }
+  #log { padding: 8px; max-height: 150px; overflow-y: auto; white-space: pre-wrap; border-bottom: 1px solid #333; }
+  #log .err { color: #f44; }
+  #log .ok { color: #4f4; }
+  #log .info { color: #aaa; }
+  canvas { border: 0; display: block; margin: 0 auto; }
+</style>
+</head>
+<body>
+<div id="log"></div>
+<canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex=-1></canvas>
+<script>
+(function() {
+    var logEl = document.getElementById('log');
+    function log(msg, cls) {
+        var line = document.createElement('div');
+        line.className = cls || 'info';
+        line.textContent = msg;
+        logEl.appendChild(line);
+        logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    var htmlPath = (typeof window.__HTML_PATH !== 'undefined') ? window.__HTML_PATH : '';
+    var binaryFiles = (typeof window.__BINARY_FILES !== 'undefined') ? window.__BINARY_FILES : null;
+
+    log('__HTML_PATH: ' + (htmlPath || '(not set)'));
+    log('__BINARY_FILES: ' + (binaryFiles ? binaryFiles.length + ' files' : '(not set)'));
+
+    if (!binaryFiles || binaryFiles.length === 0) {
+        log('No binary files injected by plugin.', 'err');
+        window.__GLB_LOADED = [];
+        return;
+    }
+
+    // Filter to GLB only and decode base64 to Uint8Array
+    var loaded = [];
+    for (var i = 0; i < binaryFiles.length; i++) {
+        var f = binaryFiles[i];
+        if (f.ext !== 'glb') continue;
+
+        log('Decoding: ' + f.name + ' (' + f.size + ' bytes)');
+        try {
+            var raw = atob(f.b64);
+            var uint8 = new Uint8Array(raw.length);
+            for (var j = 0; j < raw.length; j++) {
+                uint8[j] = raw.charCodeAt(j);
+            }
+            loaded.push({ name: f.name, path: f.path, data: uint8 });
+            log('  OK: ' + uint8.length + ' bytes decoded', 'ok');
+        } catch(e) {
+            log('  FAILED to decode: ' + e, 'err');
+        }
+    }
+
+    log('--- ' + loaded.length + ' GLB files ready ---', loaded.length > 0 ? 'ok' : 'err');
+    window.__GLB_LOADED = loaded;
+})();
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>
