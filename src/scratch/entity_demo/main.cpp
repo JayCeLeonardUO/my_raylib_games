@@ -47,9 +47,10 @@ template <typename T> constexpr bool is_unset(const T& val) {
 }
 
 // ============================================================================
-// Entity
+// Enum for ordering draw calls
 // ============================================================================
 enum class RenderLayerEnum { RENDER_LAYER_0, RENDER_LAYER_1, RENDER_LAYER_2, RENDER_LAYER_3 };
+
 // ============================================================================
 // Trait Name Defines
 // ============================================================================
@@ -65,6 +66,16 @@ enum class RenderLayerEnum { RENDER_LAYER_0, RENDER_LAYER_1, RENDER_LAYER_2, REN
 #define TRAIT_IS_BILLBOARD "is_billboard"
 #define TRAIT_IS_ANIMATION "is_animation"
 #define TRAIT_IS_LOOPING "is_looping"
+
+// ============================================================================
+// Groups
+// ============================================================================
+enum GroupId { group_seed_deck, num_groups };
+
+struct group_info {
+  thing_ref parent = thing_ref::get_nil_ref();
+  thing_ref next = thing_ref::get_nil_ref();
+};
 
 // ============================================================================
 // Entity
@@ -103,9 +114,15 @@ struct Entity : thing_base {
   float animation_start_time = 0.0f;
   float animation_speed = 1.0f;
 
+  // intrusive group membership, indexed by GroupId. groups[g] is this entity's
+  // ring-node for group g. orthogonal to spawner/parent_offset.
+  group_info groups[num_groups] = {};
+
   void* traits[MAX_TRAITS] = {};
   /** @brief Implicit conversion to ModelInstance reference. */
   operator ModelInstance&() { return model; }
+
+  int gx = 0, gy = 0; // grid cell (seed-deck members)
 };
 
 constexpr size_t MAX_ENTITIES = 1000;
@@ -193,10 +210,19 @@ struct State {
   float click_anim_scale = 1.0f;
 
   FrameBuffer frame_buffer;
+
+  // ---- intrusive groups: head/anchor entity per group (nil => group inactive) ----
+  thing_ref group_heads[num_groups] = {};
+
+  // ---- turn state ----
+  int turn = 0;
+  int seeds_per_turn = 1;
 };
 
 inline State ctx; // Im not using a namspace becuse namespaces broke my reflection scripts
 // when parsing they want structs
+
+#include "entity_groups.hpp"
 
 /**
  * @brief Get the first hovered entity ref from the current frame.
@@ -489,6 +515,46 @@ inline void handle_pair(Entity& a, Entity& b) {
   }
 }
 
+/** @brief Make `anchor` the head of group `gid` as an empty ring (next -> self). */
+inline void group_set_head(GroupId gid, thing_ref anchor) {
+  auto& a = ctx.entities[anchor];
+  if (!a)
+    return;
+  ctx.group_heads[gid] = anchor;
+  a.groups[gid].parent = anchor; // head owns itself
+  a.groups[gid].next = anchor;   // empty ring points at the head
+}
+
+/** @brief Insert `child` just after the head of group `gid`. */
+inline void group_push_front(GroupId gid, thing_ref child) {
+  thing_ref head = ctx.group_heads[gid];
+  auto& h = ctx.entities[head];
+  auto& c = ctx.entities[child];
+  if (!h || !c)
+    return;
+  c.groups[gid].parent = head;
+  c.groups[gid].next = h.groups[gid].next; // old first
+  h.groups[gid].next = child;              // child is new first
+}
+
+/** @brief Remove and return the first member of group `gid`, or nil if empty. */
+inline thing_ref group_pop_front(GroupId gid) {
+  thing_ref head = ctx.group_heads[gid];
+  auto& h = ctx.entities[head];
+  if (!h)
+    return thing_ref::get_nil_ref();
+  thing_ref first = h.groups[gid].next;
+  if (first == head)
+    return thing_ref::get_nil_ref(); // empty ring
+  auto& f = ctx.entities[first];
+  if (!f)
+    return thing_ref::get_nil_ref();
+  h.groups[gid].next = f.groups[gid].next; // unlink
+  f.groups[gid].next = thing_ref::get_nil_ref();
+  f.groups[gid].parent = thing_ref::get_nil_ref();
+  return first;
+}
+
 /**
  * @brief Main per-frame update: sweeps expired entities, performs mouse ray picking,
  *        handles dragging, updates positions, ticks traits, detects collisions,
@@ -615,7 +681,7 @@ inline void update() {
         collidables.push_back(e.this_ref());
     }
 
-    for (size_t i = 0; i < collidables.size(); i++) { // pre filter collisions
+    for (size_t i = 0; i < collidables.size(); i++) {
       auto& a = ctx.entities[collidables[i]];
       if (!a)
         continue;
@@ -625,6 +691,8 @@ inline void update() {
           continue;
         if (!collides(a, b))
           continue;
+        // I have both directions of the collision pair
+        // becuase I dont handle symmetric collisions
         frame.collision_pairs.insert({a.this_ref(), b.this_ref()});
         frame.collision_pairs.insert({b.this_ref(), a.this_ref()});
       }
@@ -716,26 +784,26 @@ inline void update() {
   }
 
   //
-  // ui logic
+  // seed deck sweep -- while the deck head is populated, walk the list to nil,
+  // place each seed at its grid cell
   //
 
-  /*
-   * for ent in ents
-   * if e is button
-   * if e is in hoverd
-   * if e is in clicked down # depressed
-   * if e is in clicked up
-   * i would assume that there is call for a function pointer to what the thing should
-   * do in this event
-
-   */
+  if (auto& head = ctx.entities[ctx.group_heads[group_seed_deck]]) {
+    for (thing_ref cur = head.groups[group_seed_deck].next; cur != thing_ref::get_nil_ref();) {
+      auto& s = ctx.entities[cur];
+      if (!s)
+        break;
+      s.position = {(float)s.gx, 0.0f, (float)s.gy}; // grid -> world
+      cur = s.groups[group_seed_deck].next;
+    }
+  }
 
   //
   //  render
   //
 
   RenderAPI::layer_start(RenderLayer::Background, ctx.camera);
-  for (int x = -10; x <= 10; x++)
+  for (int x = -10; x <= 10; x++) // why the fuck is this here
     for (int z = -10; z <= 10; z++) {
       Color tile = ((x + z) % 2 == 0) ? Color{60, 60, 60, 255} : Color{40, 40, 40, 255};
       DrawPlane({(float)x, -.1f, (float)z}, {1, 1}, tile);
@@ -787,8 +855,7 @@ inline void update() {
       continue;
     float elapsed = ((float)GetTime() - e.animation_start_time) * e.animation_speed;
 
-    bool looping = TraitAPI::has(
-        e, TRAIT_IS_LOOPING); // how the fuck does it get is looping? is this a dynamic trait?
+    bool looping = TraitAPI::has(e, TRAIT_IS_LOOPING);
 
     Texture2D* tex = AnimationRegistry::get_frame(e.animation_id, elapsed, looping);
     if (!tex)
@@ -1012,8 +1079,6 @@ int main() {
   LuaAPI::init();
 
   // TODO: the second I saw this i got annoyed, why the fuck is this not some config file
-  //
-  //
 
   TraitAPI::register_trait(TRAIT_WSAD, wsad_init, wsad_update);
 

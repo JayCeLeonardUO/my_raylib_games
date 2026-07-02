@@ -380,5 +380,69 @@ inline bool run_string(const std::string& code) {
   }
   return true;
 }
+// ---- groups ----
+
+// resolve a group name string to its GroupId enum. add a line per enum group.
+static int group_id_from_name(const char* name) {
+  if (strcmp(name, "seed_deck") == 0)
+    return group_seed_deck;
+  return -1;
+}
+
+// resolve a positional entity index to a thing_ref (same scheme as set_flag/trait_add)
+static thing_ref entity_ref_from_index(
+    int idx) { // this does not use the suger of the array of thing TODO: dont use this function
+  int i = 0;
+  for (auto& e : GameCtxAPI::ctx.entities) {
+    if (i == idx)
+      return e.this_ref();
+    i++;
+  }
+  return thing_ref::get_nil_ref();
+}
+
+// init_group(group_name, head_index) -- make entity[head_index] the head/anchor of the group
+static int l_init_group(lua_State* L) {
+  const char* gname = luaL_checkstring(L, 1);
+  int head_idx = (int)luaL_checkinteger(L, 2);
+
+  int gid = group_id_from_name(gname);
+  if (gid < 0) {
+    GameConsoleAPI::print("lua: init_group: unknown group: " + std::string(gname));
+    lua_pushboolean(L, false);
+    return 1;
+  }
+  thing_ref head = entity_ref_from_index(head_idx);
+  if (head == thing_ref::get_nil_ref()) {
+    GameConsoleAPI::print("lua: init_group: invalid head index");
+    lua_pushboolean(L, false);
+    return 1;
+  }
+  GameCtxAPI::group_set_head((GroupId)gid, head);
+  lua_pushboolean(L, true);
+  return 1;
+}
+
+// add_to_group(entity_index, group_name) -- link entity into the group's list
+static int l_add_to_group(lua_State* L) {
+  int idx = (int)luaL_checkinteger(L, 1);
+  const char* gname = luaL_checkstring(L, 2);
+
+  int gid = group_id_from_name(gname);
+  if (gid < 0) {
+    GameConsoleAPI::print("lua: add_to_group: unknown group: " + std::string(gname));
+    lua_pushboolean(L, false);
+    return 1;
+  }
+  thing_ref ref = entity_ref_from_index(idx);
+  if (ref == thing_ref::get_nil_ref()) {
+    GameConsoleAPI::print("lua: add_to_group: invalid entity index");
+    lua_pushboolean(L, false);
+    return 1;
+  }
+  GameCtxAPI::group_push_front((GroupId)gid, ref);
+  lua_pushboolean(L, true);
+  return 1;
+}
 
 } // namespace LuaAPI
