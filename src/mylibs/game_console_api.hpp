@@ -90,15 +90,33 @@ public:
     return commands().find(name) != commands().end();
   }
 
+  // Optional fallback for input that is not a registered command (e.g. a Lua evaluator).
+  // Receives the raw, untokenized input line and returns text to print.
+  using FallbackFn = std::string (*)(const std::string&);
+  static FallbackFn& fallback() {
+    static FallbackFn f = nullptr;
+    return f;
+  }
+
   static std::string exec(const std::string& input) {
     auto tokens = tokenize(input);
     if (tokens.empty())
       return "";
     std::string name = tokens[0];
+    // explicit "lua <code>" prefix: hand the raw remainder to the fallback, untokenized
+    if (name == "lua" && fallback()) {
+      size_t start = input.find("lua");
+      std::string code = input.substr(start + 3);
+      size_t first = code.find_first_not_of(" \t");
+      return fallback()(first == std::string::npos ? "" : code.substr(first));
+    }
     Args args(tokens.begin() + 1, tokens.end());
     auto it = commands().find(name);
-    if (it == commands().end())
+    if (it == commands().end()) {
+      if (fallback())
+        return fallback()(input);
       return "Unknown: " + name;
+    }
     return it->second.fn(args);
   }
 

@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-constexpr int MAX_TRAITS = 10;
+constexpr int MAX_TRAITS = 32;
 
 namespace TraitAPI {
 
@@ -15,7 +15,7 @@ using InitFn = void (*)(void*);
 using UpdateFn = void (*)(void*);
 
 struct TraitEntry {
-  const char* name;
+  std::string name; // owned copy: Lua-supplied names are GC-managed and must not be kept as raw pointers
   int slot;
   InitFn init;
   UpdateFn update;
@@ -35,18 +35,19 @@ inline int register_trait(const char* name, InitFn init = nullptr, UpdateFn upda
   // .... I just need to hard generate this with python
 
   for (auto& e : state.entries) {
-    if (strcmp(e.name, name) == 0)
+    if (e.name == name)
       return e.slot;
   }
-  assert(state.next_slot < MAX_TRAITS && "Too many traits");
+  if (state.next_slot >= MAX_TRAITS)
+    return -1; // table full; callers (incl. the Lua binding) report this instead of crashing
   int slot = state.next_slot++;
-  state.entries.push_back({name, slot, init, update});
+  state.entries.push_back({std::string(name), slot, init, update});
   return slot;
 }
 
 inline int find(const char* name) {
   for (auto& e : state.entries) {
-    if (strcmp(e.name, name) == 0)
+    if (e.name == name)
       return e.slot;
   }
   return -1;
@@ -96,7 +97,7 @@ template <typename EntityList> void tick_all(EntityList& ents) {
 inline std::string debug_registered() {
   std::string out;
   for (auto& e : state.entries) {
-    out += std::string(e.name) + " [slot " + std::to_string(e.slot) + "]\n";
+    out += e.name + " [slot " + std::to_string(e.slot) + "]\n";
   }
   return out;
 }

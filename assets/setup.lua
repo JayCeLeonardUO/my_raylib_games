@@ -159,3 +159,23 @@ set_flag(10, "is_collidable", false)
 set_flag(15, "is_collidable", false)
 
 console_print("16 seeds spawned, addressed 0..15")
+
+-- ============================================================
+-- seed deck group wiring
+-- anchor spawns AFTER the seeds so the literal indices above
+-- (0..15) stay valid. anchor is the group head, seeds are members.
+--   init_group(group_name, head_index)  -- name first
+--   add_to_group(entity_index, group_name) -- index first
+-- ============================================================
+
+load_primitive("deck_anchor", "cube", 0.6, 0.1, 0.6)
+color("deck_anchor", 233, 69, 96)
+
+local anchor = spawn("deck_anchor", -5, 0.05, -5) -- index 16
+init_group("seed_deck", anchor)
+
+for i = 0, 15 do
+  add_to_group(i, "seed_deck")
+end
+
+console_print("seed_deck group: head " .. anchor .. " + 16 members")

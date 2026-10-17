@@ -7,6 +7,9 @@ extern "C" {
 }
 
 #include "animation_registry.hpp"
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
 #include <string>
 
 // Forward declarations — the game must define these before including lua_api.hpp
@@ -139,6 +142,9 @@ static int l_load_primitive(lua_State* L) {
 static int l_register_trait(lua_State* L) {
   const char* name = luaL_checkstring(L, 1);
   int slot = TraitAPI::register_trait(name);
+  if (slot < 0)
+    GameConsoleAPI::print("lua: register_trait: trait table full (MAX_TRAITS), could not add " +
+                          std::string(name));
   lua_pushinteger(L, slot);
   return 1;
 }
@@ -320,28 +326,174 @@ static int l_clear(lua_State* L) {
   return 0;
 }
 
+// ---- print capture ----
+// Lua's global print is replaced so output lands in the game console and, while an
+// eval() is in flight, in a capture buffer that is returned to the caller (in-game
+// console or remote client).
+
+inline std::string* capture_buf = nullptr;
+
+static int l_print(lua_State* L) {
+  int n = lua_gettop(L);
+  std::string line;
+  for (int i = 1; i <= n; i++) {
+    size_t len = 0;
+    const char* str = luaL_tolstring(L, i, &len); // pushes the string
+    if (i > 1)
+      line += "\t";
+    line.append(str ? str : "nil", str ? len : 3);
+    lua_pop(L, 1);
+  }
+  GameConsoleAPI::print(line);
+  if (capture_buf) {
+    if (!capture_buf->empty())
+      *capture_buf += "\n";
+    *capture_buf += line;
+  }
+  return 0;
+}
+
 // ---- lifecycle ----
+
+// group bindings are defined below init() -- forward declare so they can register
+static int l_init_group(lua_State* L);
+static int l_add_to_group(lua_State* L);
+static int l_help(lua_State* L);
+static int l_traits(lua_State* L);
+static int l_models(lua_State* L);
+static int l_entities(lua_State* L);
+
+// ---- binding table ----
+// Single source of truth for what Lua can call. help() prints it, init() registers it.
+struct Binding {
+  const char* name;
+  lua_CFunction fn;
+  const char* sig;  // argument list as the user types it
+  const char* doc;  // one line
+};
+
+inline const Binding BINDINGS[] = {
+    // --- discovery ---
+    {"help", l_help, "help([name])", "this list, or details for one function"},
+    {"entities", l_entities, "entities()", "list live entities: index, model, position, traits"},
+    {"traits", l_traits, "traits()", "list registered trait names"},
+    {"models", l_models, "models()", "list loaded model names"},
+    {"entity_count", l_entity_count, "entity_count()", "number of live entities"},
+    {"model_count", l_model_count, "model_count()", "number of loaded models"},
+    // --- models ---
+    {"load_model", l_load_model, "load_model(path, [name])", "load a .glb/.obj; name defaults to the file stem"},
+    {"load_primitive", l_load_primitive, "load_primitive(name, type, [a], [b], [c])",
+     "type: cube sphere cylinder plane torus knot cone; a b c are dims/segments"},
+    {"color", l_color, "color(model_name, r, g, b)", "tint a model's diffuse color (0-255)"},
+    // --- entities ---
+    {"spawn", l_spawn, "spawn(model_name, [x], [y], [z], [scale]) -> index",
+     "spawn an entity; the returned index is what every other call takes"},
+    {"spawn_child", l_spawn_child, "spawn_child(parent_index, model_name, [x], [y], [z], [scale])",
+     "spawn attached to a parent entity"},
+    {"clear", l_clear, "clear()", "remove all entities (indices reset)"},
+    {"set_flag", l_set_flag, "set_flag(index, flag, bool)",
+     "flags: is_draggable is_collidable is_highlightable"},
+    // --- traits ---
+    {"trait_add", l_trait_add, "trait_add(index, trait_name) -> bool",
+     "attach a registered trait; false if the index is bad (unknown names are ignored)"},
+    {"trait_rm", l_trait_rm, "trait_rm(index, trait_name) -> bool", "detach a trait"},
+    {"register_trait", l_register_trait, "register_trait(name) -> slot",
+     "add a new tag-only trait (no C++ behavior); -1 if the table is full"},
+    // --- animation ---
+    {"register_animation", l_register_animation, "register_animation(name, dir_path, frame_duration)",
+     "register a frame-sequence animation from a directory of images"},
+    {"spawn_animation", l_spawn_animation, "spawn_animation(anim_name, x, y, z, [scale], [looping])",
+     "spawn a 2d animation entity at a position"},
+    {"set_click_animation", l_set_click_animation, "set_click_animation(anim_name | nil)",
+     "play this animation wherever the mouse clicks"},
+    // --- groups ---
+    {"init_group", l_init_group, "init_group(group_name, head_index)",
+     "make an entity the head of a group (groups: seed_deck)"},
+    {"add_to_group", l_add_to_group, "add_to_group(index, group_name)", "link an entity into a group"},
+    // --- output ---
+    {"print", l_print, "print(...)", "print to the game console and to the remote console"},
+    {"console_print", l_console_print, "console_print(msg)", "print a single string to the game console"},
+};
+
+// help([name]) -> string
+static int l_help(lua_State* L) {
+  const char* want = luaL_optstring(L, 1, nullptr);
+  std::string out;
+  if (want) {
+    for (const auto& b : BINDINGS) {
+      if (strcmp(b.name, want) == 0) {
+        out = std::string(b.sig) + "\n  " + b.doc;
+        lua_pushstring(L, out.c_str());
+        return 1;
+      }
+    }
+    lua_pushstring(L, ("no such function: " + std::string(want)).c_str());
+    return 1;
+  }
+  out += "Lua API (entity indices are 0-based spawn order; `entities()` shows them)\n";
+  size_t w = 0;
+  for (const auto& b : BINDINGS)
+    w = std::max(w, strlen(b.sig));
+  for (const auto& b : BINDINGS) {
+    out += "  " + std::string(b.sig);
+    out.append(w - strlen(b.sig) + 2, ' ');
+    out += b.doc;
+    out += "\n";
+  }
+  out += "Also: any registered console command (`help` alone lists them in-game), and plain Lua.\n";
+  out += "Try: traits()  models()  entities()  help(\"spawn\")";
+  lua_pushstring(L, out.c_str());
+  return 1;
+}
+
+// traits() -> string
+static int l_traits(lua_State* L) {
+  std::string out = TraitAPI::debug_registered();
+  if (!out.empty() && out.back() == '\n')
+    out.pop_back();
+  lua_pushstring(L, out.c_str());
+  return 1;
+}
+
+// models() -> string
+static int l_models(lua_State* L) {
+  std::string out;
+  for (const auto& n : ModelAPI::names()) {
+    if (!out.empty())
+      out += "\n";
+    out += n;
+  }
+  lua_pushstring(L, out.empty() ? "(no models loaded)" : out.c_str());
+  return 1;
+}
+
+// entities() -> string
+static int l_entities(lua_State* L) {
+  std::string out;
+  int i = 0;
+  for (auto& e : GameCtxAPI::ctx.entities) {
+    char line[256];
+    snprintf(line, sizeof(line), "[%d] %-16s (%.1f, %.1f, %.1f)", i,
+             e.model.valid() ? e.model.name : e._debug_name, e.position.x, e.position.y,
+             e.position.z);
+    std::string tr = TraitAPI::debug_entity(e);
+    if (!out.empty())
+      out += "\n";
+    out += line;
+    if (!tr.empty())
+      out += "  traits: " + tr;
+    i++;
+  }
+  lua_pushstring(L, out.empty() ? "(no entities)" : out.c_str());
+  return 1;
+}
 
 inline void init() {
   L = luaL_newstate();
   luaL_openlibs(L);
 
-  lua_register(L, "spawn", l_spawn);
-  lua_register(L, "spawn_child", l_spawn_child);
-  lua_register(L, "load_model", l_load_model);
-  lua_register(L, "load_primitive", l_load_primitive);
-  lua_register(L, "register_trait", l_register_trait);
-  lua_register(L, "console_print", l_console_print);
-  lua_register(L, "trait_add", l_trait_add);
-  lua_register(L, "trait_rm", l_trait_rm);
-  lua_register(L, "entity_count", l_entity_count);
-  lua_register(L, "model_count", l_model_count);
-  lua_register(L, "color", l_color);
-  lua_register(L, "set_flag", l_set_flag);
-  lua_register(L, "clear", l_clear);
-  lua_register(L, "register_animation", l_register_animation);
-  lua_register(L, "spawn_animation", l_spawn_animation);
-  lua_register(L, "set_click_animation", l_set_click_animation);
+  for (const auto& b : BINDINGS)
+    lua_register(L, b.name, b.fn);
 }
 
 inline void shutdown() {
@@ -379,6 +531,53 @@ inline bool run_string(const std::string& code) {
     return false;
   }
   return true;
+}
+
+// Evaluate a chunk REPL-style and return everything it produced as text:
+// captured print() output, then the chunk's return values (one per line), or
+// "lua error: ..." on failure. Like lua.c, "return <code>" is tried first so a
+// bare expression such as `entity_count()` or `1+1` shows its value.
+inline std::string eval(const std::string& code) {
+  if (!L)
+    return "lua: not initialized";
+
+  std::string out;
+  std::string* prev_capture = capture_buf;
+  capture_buf = &out;
+
+  int base = lua_gettop(L);
+  int status = luaL_loadstring(L, ("return " + code).c_str());
+  if (status != LUA_OK) {
+    lua_pop(L, 1); // discard syntax error from the "return" attempt
+    status = luaL_loadstring(L, code.c_str());
+  }
+  if (status == LUA_OK)
+    status = lua_pcall(L, 0, LUA_MULTRET, 0);
+
+  if (status != LUA_OK) {
+    const char* err = lua_tostring(L, -1);
+    std::string msg = "lua error: " + std::string(err ? err : "unknown");
+    GameConsoleAPI::print(msg);
+    if (!out.empty())
+      out += "\n";
+    out += msg;
+    lua_pop(L, 1);
+  } else {
+    int nresults = lua_gettop(L) - base;
+    for (int i = 1; i <= nresults; i++) {
+      size_t len = 0;
+      const char* str = luaL_tolstring(L, base + i, &len);
+      std::string val(str ? str : "nil", str ? len : 3);
+      lua_pop(L, 1);
+      GameConsoleAPI::print(val);
+      if (!out.empty())
+        out += "\n";
+      out += val;
+    }
+  }
+  lua_settop(L, base);
+  capture_buf = prev_capture;
+  return out;
 }
 // ---- groups ----
 

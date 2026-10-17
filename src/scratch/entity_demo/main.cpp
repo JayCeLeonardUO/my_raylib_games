@@ -72,6 +72,9 @@ enum class RenderLayerEnum { RENDER_LAYER_0, RENDER_LAYER_1, RENDER_LAYER_2, REN
 // ============================================================================
 enum GroupId { group_seed_deck, num_groups };
 
+// debug names, indexed by GroupId. add a name per enum group.
+inline const char* group_names[num_groups] = {"seed_deck"};
+
 struct group_info {
   thing_ref parent = thing_ref::get_nil_ref();
   thing_ref next = thing_ref::get_nil_ref();
@@ -555,6 +558,21 @@ inline thing_ref group_pop_front(GroupId gid) {
   return first;
 }
 
+/** @brief Comma-joined list of groups `e` belongs to, for the debug UI ("-" if none). */
+inline std::string debug_entity_groups(Entity& e) {
+  std::string out;
+  for (int g = 0; g < num_groups; g++) {
+    if (e.groups[g].parent == thing_ref::get_nil_ref())
+      continue; // not in this group
+    if (!out.empty())
+      out += ",";
+    out += group_names[g];
+    if (ctx.group_heads[g] == e.this_ref())
+      out += "(head)";
+  }
+  return out.empty() ? "-" : out;
+}
+
 /**
  * @brief Main per-frame update: sweeps expired entities, performs mouse ray picking,
  *        handles dragging, updates positions, ticks traits, detects collisions,
@@ -784,16 +802,17 @@ inline void update() {
   }
 
   //
-  // seed deck sweep -- while the deck head is populated, walk the list to nil,
-  // place each seed at its grid cell
+  // seed deck sweep -- while the deck head is populated, walk the ring until
+  // it comes back around to the head (members never point at nil)
   //
 
   if (auto& head = ctx.entities[ctx.group_heads[group_seed_deck]]) {
-    for (thing_ref cur = head.groups[group_seed_deck].next; cur != thing_ref::get_nil_ref();) {
+    thing_ref head_ref = head.this_ref();
+    for (thing_ref cur = head.groups[group_seed_deck].next; cur != head_ref;) {
       auto& s = ctx.entities[cur];
       if (!s)
         break;
-      s.position = {(float)s.gx, 0.0f, (float)s.gy}; // grid -> world
+      // per-member turn logic goes here. Lua owns seed position -- do not write it
       cur = s.groups[group_seed_deck].next;
     }
   }
@@ -915,9 +934,11 @@ inline void draw_imgui() {
       for (auto& e : ctx.entities) {
         ImGui::PushID(idx);
         std::string traits_str = TraitAPI::debug_entity(e);
+        std::string groups_str = debug_entity_groups(e);
         bool is_selected = (e.this_ref() == ctx.selected);
-        if (ImGui::Selectable(TextFormat("%d: %s [%s]", idx, e.model.valid() ? e.model.name : "---",
-                                         traits_str.c_str()),
+        if (ImGui::Selectable(TextFormat("%d: %s [%s] {%s}", idx,
+                                         e.model.valid() ? e.model.name : "---",
+                                         traits_str.c_str(), groups_str.c_str()),
                               is_selected)) {
           ctx.selected = e.this_ref();
         }
@@ -934,6 +955,7 @@ inline void draw_imgui() {
       ImGui::Separator();
       ImGui::Text("Selected: %s", sel.model.valid() ? sel.model.name : "---");
       ImGui::Text("Traits: %s", TraitAPI::debug_entity(sel).c_str());
+      ImGui::Text("Groups: %s", debug_entity_groups(sel).c_str());
       ImGui::DragFloat3("Position", &sel.position.x, 0.1f);
       ImGui::DragFloat3("Rotation", &sel.rotation.x, 0.01f);
       ImGui::DragFloat("Scale", &sel.scale, 0.1f, 0.1f, 10.0f);
@@ -1060,6 +1082,8 @@ inline void update_crpg_camera(Camera3D& cam) {
 // Lua API
 // ============================================================================
 #include "../../mylibs/lua_api.hpp"
+#include "../../mylibs/lua_remote_api.hpp"
+#include <cstdlib>
 
 #include "cmds.inc"
 
@@ -1077,6 +1101,20 @@ int main() {
   RenderAPI::init();
 
   LuaAPI::init();
+
+  // in-game console: anything that is not a registered command is evaluated as Lua,
+  // and "lua <code>" forces Lua evaluation explicitly
+  GameConsoleAPI::fallback() = [](const std::string& code) { return LuaAPI::eval(code); };
+
+  // remote Lua console on localhost (override port with ENTITY_DEMO_LUA_PORT, 0 disables)
+  {
+    int port = LuaRemote::DEFAULT_PORT;
+    if (const char* env = std::getenv("ENTITY_DEMO_LUA_PORT"))
+      port = std::atoi(env);
+    if (port > 0)
+      LuaRemote::start([](const std::string& code) { return LuaAPI::eval(code); },
+                       [](const std::string& msg) { GameConsoleAPI::print(msg); }, port);
+  }
 
   // TODO: the second I saw this i got annoyed, why the fuck is this not some config file
 
@@ -1109,6 +1147,8 @@ int main() {
 
   while (!WindowShouldClose()) {
 
+    LuaRemote::poll(); // run any Lua sent from an external console, on the main thread
+
     if (IsKeyPressed(KEY_GRAVE))
       GameConsoleAPI::toggle_visible();
 
@@ -1123,6 +1163,7 @@ int main() {
     EndDrawing();
   }
 
+  LuaRemote::stop();
   LuaAPI::shutdown();
   GameCtxAPI::clear_entities();
   AnimationRegistry::unload_all();
