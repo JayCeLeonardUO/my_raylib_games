@@ -26,10 +26,10 @@ enum class RenderLayer : int {
 
 struct RenderTraits {
   RenderLayer layer = RenderLayer::Entities;
-  uint visible : 1 = 1;
-  uint highlighted : 1 = 0;
-  uint selected : 1 = 0;
-  uint wireframe : 1 = 0;
+  unsigned int visible : 1 = 1;
+  unsigned int highlighted : 1 = 0;
+  unsigned int selected : 1 = 0;
+  unsigned int wireframe : 1 = 0;
 };
 
 // ============================================================================

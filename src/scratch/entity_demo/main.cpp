@@ -1134,6 +1134,9 @@ inline void update_crpg_camera(Camera3D& cam) {
 // ============================================================================
 #include "../../mylibs/lua_remote_api.hpp"
 #include "lua_bindings.inc"
+#if defined(__EMSCRIPTEN__)
+#include <emscripten/emscripten.h>
+#endif
 #include <cstdlib>
 
 #include "cmds.inc"
@@ -1145,6 +1148,26 @@ inline void update_crpg_camera(Camera3D& cam) {
  * @brief Application entry point. Initializes window, ImGui, rendering, Lua,
  *        registers traits, runs the main loop, and cleans up on exit.
  */
+/// One iteration of the game loop. Desktop calls it from a while loop; the web build
+/// hands it to the browser via emscripten_set_main_loop.
+static void frame() {
+  LuaRemote::poll(); // run any Lua sent from an external console, on the main thread
+
+  if (IsKeyPressed(KEY_GRAVE))
+    GameConsoleAPI::toggle_visible();
+
+  if (!GameConsoleAPI::visible())
+    GameCtxAPI::update_crpg_camera(GameCtxAPI::ctx.camera);
+
+  BeginDrawing();
+  ClearBackground(DARKGRAY);
+  GameCtxAPI::update();
+  GameCtxAPI::draw_imgui();
+  DrawFPS(10, 10);
+  EntityDemoLua::take_pending_screenshot();
+  EndDrawing();
+}
+
 int main() {
   InitWindow(1280, 720, "Entity Spawner");
   SetTargetFPS(60);
@@ -1201,24 +1224,14 @@ int main() {
 
   LuaAPI::run_file("assets/setup.lua");
 
-  while (!WindowShouldClose()) {
-
-    LuaRemote::poll(); // run any Lua sent from an external console, on the main thread
-
-    if (IsKeyPressed(KEY_GRAVE))
-      GameConsoleAPI::toggle_visible();
-
-    if (!GameConsoleAPI::visible())
-      GameCtxAPI::update_crpg_camera(GameCtxAPI::ctx.camera);
-
-    BeginDrawing();
-    ClearBackground(DARKGRAY);
-    GameCtxAPI::update();
-    GameCtxAPI::draw_imgui();
-    DrawFPS(10, 10);
-    EntityDemoLua::take_pending_screenshot();
-    EndDrawing();
-  }
+#if defined(__EMSCRIPTEN__)
+  // the browser owns the loop: it calls frame() once per animation frame and never
+  // returns here, so the teardown below only runs on desktop
+  emscripten_set_main_loop(frame, 0, 1);
+#else
+  while (!WindowShouldClose())
+    frame();
+#endif
 
   LuaRemote::stop();
   LuaAPI::shutdown();

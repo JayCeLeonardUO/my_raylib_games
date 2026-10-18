@@ -101,8 +101,16 @@ struct Locs {
 
 inline const Scheme& current() { return SCHEMES[scheme_index]; }
 
-inline bool init(const char* vs_path = "assets/shaders/three_point.vs",
-                 const char* fs_path = "assets/shaders/three_point.fs") {
+// The web build runs on WebGL 1 (GLSL ES 1.00), so it gets its own shader pair.
+#if defined(__EMSCRIPTEN__)
+inline constexpr const char* DEFAULT_VS = "assets/shaders/three_point_es100.vs";
+inline constexpr const char* DEFAULT_FS = "assets/shaders/three_point_es100.fs";
+#else
+inline constexpr const char* DEFAULT_VS = "assets/shaders/three_point.vs";
+inline constexpr const char* DEFAULT_FS = "assets/shaders/three_point.fs";
+#endif
+
+inline bool init(const char* vs_path = DEFAULT_VS, const char* fs_path = DEFAULT_FS) {
   shader = LoadShader(vs_path, fs_path);
   ready = shader.id != 0 && shader.id != rlGetShaderIdDefault();
   if (!ready) {
