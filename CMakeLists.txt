@@ -197,6 +197,7 @@ game_embed_files(entity_demo
   assets/setup.lua
   assets/shaders/three_point_es100.vs
   assets/shaders/three_point_es100.fs
+  assets/shaders/three_point_instanced_es100.vs
 )
 
 # ImGui prototype

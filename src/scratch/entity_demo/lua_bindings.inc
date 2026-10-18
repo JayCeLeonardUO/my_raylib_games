@@ -330,8 +330,23 @@ static int l_light_scheme(lua_State* L) {
   return 1;
 }
 
-// light_intensity([x]) -> current master intensity; with a number, sets it
+// light_intensity([x]) -> master intensity; with a number, sets it.
+// light_intensity(light, [x]) -> that light's intensity; light is key, fill, rim or ambient.
 static int l_light_intensity(lua_State* L) {
+  if (lua_type(L, 1) == LUA_TSTRING) {
+    const char* name = lua_tostring(L, 1);
+    float* v = ThreePointLight::intensity_of(name);
+    if (!v) {
+      LuaAPI::log("lua: light_intensity: unknown light: " + std::string(name) +
+                  " (key, fill, rim, ambient)");
+      lua_pushboolean(L, false);
+      return 1;
+    }
+    if (lua_gettop(L) >= 2)
+      *v = (float)luaL_checknumber(L, 2);
+    lua_pushnumber(L, *v);
+    return 1;
+  }
   if (lua_gettop(L) >= 1)
     ThreePointLight::master_intensity = (float)luaL_checknumber(L, 1);
   lua_pushnumber(L, ThreePointLight::master_intensity);
@@ -490,6 +505,19 @@ static int l_add_to_group(lua_State* L) {
   return 1;
 }
 
+// particles([count]) -> count. Get or set how many tumbling triangles are drawn (0 hides them).
+static int l_particles(lua_State* L) {
+  auto& ps = GameCtxAPI::particles;
+  if (lua_gettop(L) >= 1) {
+    ps.count = (int)luaL_checkinteger(L, 1);
+    if (ps.count < 0)
+      ps.count = 0;
+    ps.respawn();
+  }
+  lua_pushinteger(L, ps.count);
+  return 1;
+}
+
 // ---- binding table ----
 // Single source of truth for what this game exposes. help() prints it; register_lua_bindings()
 // registers it with the VM. `help` and `print` are provided by LuaAPI itself.
@@ -532,8 +560,12 @@ inline const LuaAPI::Binding BINDINGS[] = {
     {"add_to_group", l_add_to_group, "add_to_group(index, group_name)", "link an entity into a group"},
     // --- lighting (entities need the "three_point_lit" trait) ---
     {"light_scheme", l_light_scheme, "light_scheme([name]) -> name",
-     "get/set the three-point scheme: Studio Neutral, Warm Key / Cool Fill, Cool Key / Warm Fill, Golden Hour, Moonlight, Overcast Soft"},
-    {"light_intensity", l_light_intensity, "light_intensity([x]) -> x", "get/set master lighting intensity (1.0 default)"},
+     "get/set the three-point scheme: Studio Neutral, Warm Key / Cool Fill, Cool Key / Warm Fill, Golden Hour, Moonlight, Overcast Soft, Forest"},
+    {"light_intensity", l_light_intensity, "light_intensity([x]) | light_intensity(light, [x]) -> x",
+     "get/set master intensity, or one light's: key fill rim ambient"},
+    // --- particles ---
+    {"particles", l_particles, "particles([count]) -> count",
+     "how many tumbling triangle particles are drawn (one instanced call); 0 hides them"},
     // --- camera ---
     {"camera", l_camera, "camera([x, y, z, [tx, ty, tz]]) -> pos, target",
      "get or set the camera position and look-at target"},

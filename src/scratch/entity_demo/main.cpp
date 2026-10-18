@@ -19,8 +19,10 @@ exit
 #include "../../mylibs/lua_api.hpp"   // VM core, game-agnostic
 #include "../../mylibs/lua_imgui.hpp" // Lua history window
 #include "../../mylibs/model_api.hpp"
+#include "../../mylibs/normal_map_utils.hpp"
 #include "../../mylibs/render_api.hpp"
 #include "../../mylibs/three_point_light_api.hpp"
+#include "../../mylibs/triangle_particles.hpp"
 #include <array>
 #include <bit>
 #include <cmath>
@@ -228,6 +230,32 @@ struct State {
 
 inline State ctx; // Im not using a namspace becuse namespaces broke my reflection scripts
 // when parsing they want structs
+
+// ---- ground platform: one flat slab lit by the three-point shader, with a procedural
+// noise normal map so the key/fill/rim colors read across the surface ----
+inline Model ground = {0};
+inline Texture2D ground_normal_map = {0};
+inline constexpr float GROUND_SIZE = 60.0f;
+inline constexpr float GROUND_THICKNESS = 0.4f;
+inline constexpr float GROUND_TOP_Y = -0.1f; // same height the old tiles sat at
+
+inline void init_ground() {
+  Mesh slab = GenMeshCube(GROUND_SIZE, GROUND_THICKNESS, GROUND_SIZE);
+  GenMeshTangents(&slab); // the normal map needs a tangent frame
+  ground = LoadModelFromMesh(slab);
+  ground_normal_map = NormalMapUtils::make_noise_normal_map(1024, 0.9f);
+  ground.materials[0].maps[MATERIAL_MAP_DIFFUSE].color = Color{76, 78, 86, 255};
+  ground.materials[0].maps[MATERIAL_MAP_NORMAL].texture = ground_normal_map;
+}
+
+// ---- tumbling triangle particles, one instanced draw, lit by the same shader ----
+inline TriangleParticles::System particles;
+
+inline void unload_ground() {
+  ground.materials[0].maps[MATERIAL_MAP_NORMAL].texture = Texture2D{0}; // owned below
+  UnloadTexture(ground_normal_map);
+  UnloadModel(ground);
+}
 
 #include "entity_groups.hpp"
 
@@ -826,11 +854,9 @@ inline void update() {
   //
 
   RenderAPI::layer_start(RenderLayer::Background, ctx.camera);
-  for (int x = -10; x <= 10; x++) // why the fuck is this here
-    for (int z = -10; z <= 10; z++) {
-      Color tile = ((x + z) % 2 == 0) ? Color{60, 60, 60, 255} : Color{40, 40, 40, 255};
-      DrawPlane({(float)x, -.1f, (float)z}, {1, 1}, tile);
-    }
+  ThreePointLight::begin_frame(ctx.camera);
+  ThreePointLight::draw_model(ground,
+                              MatrixTranslate(0, GROUND_TOP_Y - GROUND_THICKNESS * 0.5f, 0));
 
   RenderAPI::layer_start(RenderLayer::Highlight, ctx.camera);
   if (auto& h = ctx.entities[get_hovered()]) {
@@ -841,6 +867,8 @@ inline void update() {
 
   RenderAPI::layer_start(RenderLayer::Entities, ctx.camera);
   ThreePointLight::begin_frame(ctx.camera);
+  particles.update(GetFrameTime());
+  particles.draw();
   for (auto& e : ctx.entities) {
 
     if (!e.render.visible || !e.model.valid()) {
@@ -1001,6 +1029,10 @@ inline void draw_imgui() {
     //
     // three-point lighting (global scheme shared by every entity with the trait)
     //
+
+    if (ImGui::CollapsingHeader("Particles")) {
+      particles.draw_imgui();
+    }
 
     if (ImGui::CollapsingHeader("Three-Point Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
       ThreePointLight::draw_imgui();
@@ -1174,6 +1206,8 @@ int main() {
   rlImGuiSetup(true);
   RenderAPI::init();
   ThreePointLight::init();
+  GameCtxAPI::init_ground();
+  GameCtxAPI::particles.init();
 
   LuaAPI::set_log([](const std::string& m) { GameConsoleAPI::print(m); });
   LuaAPI::init();
@@ -1237,6 +1271,8 @@ int main() {
   LuaAPI::shutdown();
   GameCtxAPI::clear_entities();
   AnimationRegistry::unload_all();
+  GameCtxAPI::particles.unload();
+  GameCtxAPI::unload_ground();
   ThreePointLight::shutdown();
   RenderAPI::shutdown();
   ModelAPI::unload_all();
