@@ -194,10 +194,3 @@ REGISTER_CMD(target, "target <x> <y> <z>", {
   return "OK";
 });
 
-/** @brief Execute a Lua script file by path. */
-REGISTER_CMD(lua, "lua <file> — run a lua script", {
-  if (args.empty())
-    return std::string("Usage: lua <file>");
-  bool ok = LuaAPI::run_file(args[0]);
-  return ok ? "OK" : "Failed";
-});

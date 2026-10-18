@@ -179,3 +179,16 @@ for i = 0, 15 do
 end
 
 console_print("seed_deck group: head " .. anchor .. " + 16 members")
+
+-- ============================================================
+-- lighting: give everything in the initial scene the
+-- camera-relative three-point lighting trait. keep this last so
+-- it covers every entity spawned above. pick a scheme with
+-- light_scheme("...") or from the dev menu.
+-- ============================================================
+
+for i = 0, entity_count() - 1 do
+  trait_add(i, "three_point_lit")
+end
+light_scheme("Studio Neutral")
+console_print("three_point_lit applied to " .. entity_count() .. " entities")

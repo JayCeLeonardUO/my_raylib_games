@@ -16,8 +16,11 @@ exit
 #include "../../mylibs/animation_registry.hpp"
 #include "../../mylibs/game_console_api.hpp"
 #include "../../mylibs/ilist.hpp" // I think I named this ilist for intrusive list
+#include "../../mylibs/lua_api.hpp"   // VM core, game-agnostic
+#include "../../mylibs/lua_imgui.hpp" // Lua history window
 #include "../../mylibs/model_api.hpp"
 #include "../../mylibs/render_api.hpp"
+#include "../../mylibs/three_point_light_api.hpp"
 #include <array>
 #include <bit>
 #include <cmath>
@@ -66,6 +69,7 @@ enum class RenderLayerEnum { RENDER_LAYER_0, RENDER_LAYER_1, RENDER_LAYER_2, REN
 #define TRAIT_IS_BILLBOARD "is_billboard"
 #define TRAIT_IS_ANIMATION "is_animation"
 #define TRAIT_IS_LOOPING "is_looping"
+#define TRAIT_THREE_POINT_LIT "three_point_lit" // visual: camera-relative key/fill/rim lighting
 
 // ============================================================================
 // Groups
@@ -836,13 +840,17 @@ inline void update() {
   }
 
   RenderAPI::layer_start(RenderLayer::Entities, ctx.camera);
+  ThreePointLight::begin_frame(ctx.camera);
   for (auto& e : ctx.entities) {
 
     if (!e.render.visible || !e.model.valid()) {
       continue;
     }
 
-    draw_model_normal(e.model.name, entity_transform(e));
+    if (TraitAPI::has(e, TRAIT_THREE_POINT_LIT))
+      ThreePointLight::draw_model(e.model.model, entity_transform(e));
+    else
+      draw_model_normal(e.model.name, entity_transform(e));
 
     if (TraitAPI::has(e, TRAIT_IS_HITBOX)) {
       DrawBoundingBox(compute_world_bbox(e), RED);
@@ -900,6 +908,8 @@ inline void update() {
  * @brief Draw the ImGui debug panels: scene inspector, entity list,
  *        selected entity properties, trait registry, and game console.
  */
+inline bool show_lua_history = false; // toggled from the Scene panel's dev tools
+
 inline void draw_imgui() {
   rlImGuiBegin();
   if (ImGui::Begin("Scene")) {
@@ -910,6 +920,17 @@ inline void draw_imgui() {
 
     ImGui::Text("Entities: %zu", entity_count());
     ImGui::Text("Models: %zu", ModelAPI::count());
+    ImGui::Separator();
+
+    //
+    // dev tools
+    //
+
+    if (ImGui::Button(show_lua_history ? "Hide Lua history" : "Show Lua history"))
+      show_lua_history = !show_lua_history;
+    ImGui::SameLine();
+    if (ImGui::Button(GameConsoleAPI::visible() ? "Hide console" : "Show console (~)"))
+      GameConsoleAPI::toggle_visible();
     ImGui::Separator();
 
     //
@@ -963,10 +984,39 @@ inline void draw_imgui() {
       bool visible = sel.render.visible;
       if (ImGui::Checkbox("Visible", &visible))
         sel.render.visible = visible;
+      bool lit = TraitAPI::has(sel, TRAIT_THREE_POINT_LIT);
+      if (ImGui::Checkbox("Three-point lit", &lit)) {
+        if (lit)
+          TraitAPI::apply(sel, TRAIT_THREE_POINT_LIT);
+        else
+          TraitAPI::remove(sel, TRAIT_THREE_POINT_LIT);
+      }
       ImGui::Separator();
       if (ImGui::Button("Delete")) {
         ctx.entities.remove(ctx.selected);
         ctx.selected = thing_ref::get_nil_ref();
+      }
+    }
+
+    //
+    // three-point lighting (global scheme shared by every entity with the trait)
+    //
+
+    if (ImGui::CollapsingHeader("Three-Point Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
+      ThreePointLight::draw_imgui();
+      int lit_count = 0;
+      for (auto& e : ctx.entities)
+        if (TraitAPI::has(e, TRAIT_THREE_POINT_LIT))
+          lit_count++;
+      ImGui::Text("Lit entities: %d / %zu", lit_count, entity_count());
+      if (ImGui::Button("Apply to all")) {
+        for (auto& e : ctx.entities)
+          TraitAPI::apply(e, TRAIT_THREE_POINT_LIT);
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Remove from all")) {
+        for (auto& e : ctx.entities)
+          TraitAPI::remove(e, TRAIT_THREE_POINT_LIT);
       }
     }
 
@@ -1009,6 +1059,7 @@ inline void draw_imgui() {
   //
 
   GameConsoleAPI::draw_imgui();
+  LuaImGui::draw_history(&show_lua_history);
   rlImGuiEnd();
 }
 
@@ -1079,10 +1130,10 @@ inline void update_crpg_camera(Camera3D& cam) {
 #include "my_gltf_utils.hpp"
 
 // ============================================================================
-// Lua API
+// Lua bindings (game-specific; the VM core and viewer are included at the top)
 // ============================================================================
-#include "../../mylibs/lua_api.hpp"
 #include "../../mylibs/lua_remote_api.hpp"
+#include "lua_bindings.inc"
 #include <cstdlib>
 
 #include "cmds.inc"
@@ -1099,8 +1150,11 @@ int main() {
   SetTargetFPS(60);
   rlImGuiSetup(true);
   RenderAPI::init();
+  ThreePointLight::init();
 
+  LuaAPI::set_log([](const std::string& m) { GameConsoleAPI::print(m); });
   LuaAPI::init();
+  EntityDemoLua::register_lua_bindings();
 
   // in-game console: anything that is not a registered command is evaluated as Lua,
   // and "lua <code>" forces Lua evaluation explicitly
@@ -1138,6 +1192,8 @@ int main() {
 
   TraitAPI::register_trait(TRAIT_IS_LOOPING);
 
+  TraitAPI::register_trait(TRAIT_THREE_POINT_LIT);
+
   GameConsoleAPI::print("Press ~ for console.");
 
   // this should become an arg the to main loop,
@@ -1160,6 +1216,7 @@ int main() {
     GameCtxAPI::update();
     GameCtxAPI::draw_imgui();
     DrawFPS(10, 10);
+    EntityDemoLua::take_pending_screenshot();
     EndDrawing();
   }
 
@@ -1167,6 +1224,7 @@ int main() {
   LuaAPI::shutdown();
   GameCtxAPI::clear_entities();
   AnimationRegistry::unload_all();
+  ThreePointLight::shutdown();
   RenderAPI::shutdown();
   ModelAPI::unload_all();
   rlImGuiShutdown();
