@@ -1,0 +1,78 @@
+name: Deploy GitHub Pages
+
+# One Pages site: Doxygen docs at the root (as before) and the Emscripten build of the
+# games under /play/. A Pages deploy replaces the whole site, so both are built here.
+
+on:
+  push:
+    branches: [main, wasm-build]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  EMSDK_VERSION: 5.0.3   # matches the local ~/emsdk used by build_web.sh
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Doxygen
+        run: sudo apt-get install -y doxygen graphviz
+
+      - name: Generate docs
+        run: doxygen Doxyfile
+
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ env.EMSDK_VERSION }}
+          actions-cache-folder: emsdk-cache
+
+      - name: Build entity_demo for the web
+        run: ./build_web.sh entity_demo
+
+      - name: Assemble site
+        run: |
+          mkdir -p site/play
+          cp -r docs/html/. site/
+          cp build_web/entity_demo.html site/play/
+          cat > site/play/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en"><head><meta charset="utf-8"><title>my_raylib_games - play</title>
+          <style>body{font-family:system-ui,sans-serif;background:#1e1e1e;color:#ddd;margin:2rem}a{color:#8cf}</style>
+          </head><body>
+          <h1>Web builds</h1>
+          <ul>
+            <li><a href="entity_demo.html">entity_demo</a> - press <code>~</code> for the Lua console</li>
+          </ul>
+          <p><a href="../">API docs</a></p>
+          </body></html>
+          HTML
+          touch site/.nojekyll
+          echo "=== site ==="; find site -maxdepth 2 -name '*.html' | head; du -sh site
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
