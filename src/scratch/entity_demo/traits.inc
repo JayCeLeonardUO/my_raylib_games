@@ -1,19 +1,5 @@
 
 // ============================================================================
-// Trait: highlightable
-// ============================================================================
-
-/** @brief Initialize the highlightable trait (no-op). */
-void highlightable_init(void* ptr) {
-  (void)ptr;
-}
-
-/** @brief Per-frame update for the highlightable trait (no-op). */
-void highlightable_update(void* ptr) {
-  (void)ptr;
-}
-
-// ============================================================================
 // Trait: wsad
 // ============================================================================
 /** @brief Initialize the WSAD movement trait (no-op). */
@@ -50,11 +36,6 @@ void pickup_init(void* ptr) {
 
 /** @brief Per-frame update for the pickup trait (no-op). */
 void pickup_update(void* ptr) {
-  (void)ptr;
-}
-
-/** @brief Per-frame update for the is_text trait (no-op). */
-void is_text_update(void* ptr) {
   (void)ptr;
 }
 

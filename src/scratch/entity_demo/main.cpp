@@ -8,7 +8,7 @@ exit
 // TRAIT API
 // ============================================================================
 
-#include "traits_api.cpp"
+#include "traits_api.hpp"
 
 // ============================================================================
 // INCLUDES
@@ -60,18 +60,11 @@ enum class RenderLayerEnum { RENDER_LAYER_0, RENDER_LAYER_1, RENDER_LAYER_2, REN
 // Trait Name Defines
 // ============================================================================
 
-#define TRAIT_WSAD "wsad"
-#define TRAIT_PICKUP "pickup"
-#define TRAIT_CROSS_SLASH_HITBOX "cross_slash_hitbox"
-#define TRAIT_IS_HITBOX "is_hitbox"
-#define TRAIT_IS_TEXT "is_text"
-#define TRAIT_IS_GRID_ALIGNED "is_grid_aligned"
-#define TRAIT_IS_PUSHABLE "is_pushable"
-#define TRAIT_NO_MODEL "no-model"
-#define TRAIT_IS_BILLBOARD "is_billboard"
-#define TRAIT_IS_ANIMATION "is_animation"
-#define TRAIT_IS_LOOPING "is_looping"
-#define TRAIT_THREE_POINT_LIT "three_point_lit" // visual: camera-relative key/fill/rim lighting
+// Traits are not listed here. They are declared with DECLARE_TRAIT(...) next to the code that
+// first needed them and collected into gen/entity_traits.gen.hpp by tools/gen_traits.py.
+
+// Model-name sentinel for entities that draw without a model (2d animations, labels).
+inline constexpr const char* NO_MODEL_NAME = "no-model";
 
 // ============================================================================
 // Groups
@@ -89,6 +82,14 @@ struct group_info {
 // ============================================================================
 // Entity
 // ============================================================================
+
+/** @brief Build a fixed-size char buffer from a literal, for struct member defaults. */
+template <size_t N> constexpr std::array<char, N> text_buf(const char* s) {
+  std::array<char, N> a{};
+  for (size_t i = 0; i + 1 < N && s[i]; i++)
+    a[i] = s[i];
+  return a;
+}
 
 struct Entity : thing_base {
   const char* _debug_name = "default_name";
@@ -116,7 +117,9 @@ struct Entity : thing_base {
   float life_time = make_unset<float>();
 
   thing_ref spawner = make_unset<thing_ref>();
-  std::array<char, 128> log_text = {};
+  // free-form text on the entity. shown by IS_TEXT labels and HOVER_CARD. the default is
+  // deliberately loud so a card that was never given text says exactly where it came from.
+  std::array<char, 128> log_text = text_buf<128>("log_text: Entity struct default (nobody set me)");
 
   // animation
   int animation_id = -1;
@@ -127,7 +130,7 @@ struct Entity : thing_base {
   // ring-node for group g. orthogonal to spawner/parent_offset.
   group_info groups[num_groups] = {};
 
-  void* traits[MAX_TRAITS] = {};
+  TraitBits traits; // generated, see gen/entity_traits.gen.hpp
   /** @brief Implicit conversion to ModelInstance reference. */
   operator ModelInstance&() { return model; }
 
@@ -269,6 +272,28 @@ inline thing_ref get_hovered() {
 }
 
 /**
+ * @brief Draw a small screen-space card next to the mouse: entity name + its log_text.
+ * raylib only (no ImGui) so it renders identically in the web build.
+ */
+inline void draw_hover_card(const Entity& e, Vector2 mouse) {
+  const int font = 18, pad = 6, gap = 4;
+  const char* head = e.model.valid() ? e.model.name : e._debug_name;
+  const char* body = e.log_text.data();
+  int w = std::max(MeasureText(head, font), MeasureText(body, font)) + pad * 2;
+  int h = font * 2 + gap + pad * 2;
+  float x = mouse.x + 16, y = mouse.y + 16;
+  if (x + w > GetScreenWidth())
+    x = mouse.x - 16 - w;
+  if (y + h > GetScreenHeight())
+    y = mouse.y - 16 - h;
+  Rectangle r = {x, y, (float)w, (float)h};
+  DrawRectangleRec(r, Fade(BLACK, 0.75f));
+  DrawRectangleLinesEx(r, 1.0f, ctx.highlight_color);
+  DrawText(head, (int)x + pad, (int)y + pad, font, ctx.highlight_color);
+  DrawText(body, (int)x + pad, (int)y + pad + font + gap, font, RAYWHITE);
+}
+
+/**
  * @brief Spawn a floating text label entity in the world.
  * @param text The text to display.
  * @param spawner Optional parent entity the label follows.
@@ -281,7 +306,7 @@ inline void spawn_label(const char* text, thing_ref spawner = thing_ref::get_nil
   ent.spawner = spawner;
   // ent.parent_offset = {0, 1.5f, 0};
   thing_ref ref = ctx.entities.add(ent);
-  TraitAPI::apply(ctx.entities[ref], TRAIT_IS_TEXT);
+  ADD_TRAIT(ctx.entities[ref], IS_TEXT);
 }
 
 /**
@@ -404,7 +429,7 @@ struct SpawnArgs {
  * @return Reference to the spawned entity, or nil on failure.
  */
 inline thing_ref spawn(const SpawnArgs& args) {
-  bool no_model = (args.model_name == TRAIT_NO_MODEL);
+  bool no_model = (args.model_name == NO_MODEL_NAME);
   ModelInstance inst = no_model ? ModelInstance{} : ModelAPI::instance(args.model_name);
 
   if (!no_model && !inst.valid())
@@ -429,11 +454,6 @@ inline thing_ref spawn(const SpawnArgs& args) {
 
   ent.flags.is_highlightable = 1;
   ent.flags.is_collidable = 1;
-
-  if (args.model_name == TRAIT_NO_MODEL) {
-    // set the inst to a primitave
-    TraitAPI::apply(ent, TRAIT_NO_MODEL);
-  }
 
   thing_ref ref = ctx.entities.add(ent);
 
@@ -476,7 +496,8 @@ inline void entity_update_position(thing_ref ref, Vector3 pos) {
   if (!e)
     return;
 
-  if (TraitAPI::has(e, TRAIT_IS_GRID_ALIGNED)) {
+  DECLARE_TRAIT(IS_GRID_ALIGNED, "position snaps to integer x/z whenever it moves");
+  if (HAS_TRAIT(e, IS_GRID_ALIGNED)) {
     pos.x = roundf(pos.x);
     pos.z = roundf(pos.z);
   }
@@ -506,12 +527,14 @@ inline void handle_pair(Entity& a, Entity& b) {
     return;
   }
 
-  if (TraitAPI::has(a, TRAIT_CROSS_SLASH_HITBOX) && TraitAPI::has(b, TRAIT_CROSS_SLASH_HITBOX)) {
+  DECLARE_TRAIT(CROSS_SLASH_HITBOX, "short-lived hitbox spawned by a cross slash; hits what it touches");
+  if (HAS_TRAIT(a, CROSS_SLASH_HITBOX) && HAS_TRAIT(b, CROSS_SLASH_HITBOX)) {
     return;
   }
 
   // if a has push distance and b is pushable, set b's velocity from the action
-  if (!is_unset(a.push_distance) && TraitAPI::has(b, TRAIT_IS_PUSHABLE)) {
+  DECLARE_TRAIT(IS_PUSHABLE, "takes velocity from pushes and from moving entities that hit it");
+  if (!is_unset(a.push_distance) && HAS_TRAIT(b, IS_PUSHABLE)) {
     Vector3 dir = Vector3Subtract(b.position, a.position);
     dir.y = 0;
     float len = Vector3Length(dir);
@@ -521,13 +544,15 @@ inline void handle_pair(Entity& a, Entity& b) {
     }
   }
 
-  if (TraitAPI::has(a, TRAIT_WSAD) && TraitAPI::has(b, TRAIT_PICKUP)) {
+  DECLARE_TRAIT(WSAD, "player: moves with WASD, can pick things up and cross slash");
+  DECLARE_TRAIT(PICKUP, "collected (removed) when a WSAD entity touches it");
+  if (HAS_TRAIT(a, WSAD) && HAS_TRAIT(b, PICKUP)) {
     GameConsoleAPI::print(std::string("Picked up ") + (b.model.valid() ? b.model.name : "???"));
     spawn_label(TextFormat("Picked up %s", b.model.valid() ? b.model.name : "???"));
     ctx.entities.remove(b.this_ref());
   }
 
-  if (TraitAPI::has(a, TRAIT_CROSS_SLASH_HITBOX)) {
+  if (HAS_TRAIT(a, CROSS_SLASH_HITBOX)) {
     GameConsoleAPI::print(std::string("cross slash hit ") +
                           (b.model.valid() ? b.model.name : "???"));
     spawn_label(TextFormat("cross slash hit %s", b.model.valid() ? b.model.name : "???"),
@@ -541,7 +566,7 @@ inline void handle_pair(Entity& a, Entity& b) {
     spawn_label(TextFormat("hit %s (%.1f)", b.model.valid() ? b.model.name : "???", speed),
                 a.this_ref());
 
-    if (TraitAPI::has(b, TRAIT_IS_PUSHABLE)) {
+    if (HAS_TRAIT(b, IS_PUSHABLE)) {
       // transfer velocity to b
       b.velocity = a.velocity;
     }
@@ -765,7 +790,7 @@ inline void update() {
       !last.dragging.empty()) {
     for (auto& hit : frame.under_mouse) {
       auto& target = ctx.entities[hit.ref];
-      if (!target || !TraitAPI::has(target, TRAIT_WSAD))
+      if (!target || !HAS_TRAIT(target, WSAD))
         continue;
 
       TraceLog(LOG_INFO, "cross slash on: %s", target.model.name);
@@ -793,8 +818,8 @@ inline void update() {
             .push_distance = 1.0f,
         });
         auto& ent = ctx.entities[ref];
-        TraitAPI::apply(ent, TRAIT_CROSS_SLASH_HITBOX);
-        TraitAPI::apply(ent, TRAIT_IS_HITBOX);
+        ADD_TRAIT(ent, CROSS_SLASH_HITBOX);
+        ADD_TRAIT(ent, IS_HITBOX);
       }
       break;
     }
@@ -814,7 +839,7 @@ inline void update() {
       if (t > 0) {
         Vector3 hit =
             Vector3Add(frame.mouse_ray.position, Vector3Scale(frame.mouse_ray.direction, t));
-        auto ref = spawn({.model_name = TRAIT_NO_MODEL,
+        auto ref = spawn({.model_name = NO_MODEL_NAME,
                           .pos = hit,
                           .scale = ctx.click_anim_scale,
                           .debug_name = "click_anim"});
@@ -827,7 +852,7 @@ inline void update() {
           if (def)
             ent.life_time =
                 (def->frame_duration / ctx.click_anim_speed) * (float)def->frames.size();
-          TraitAPI::apply(ent, TRAIT_IS_ANIMATION);
+          ADD_TRAIT(ent, IS_ANIMATION);
         }
       }
     }
@@ -875,12 +900,14 @@ inline void update() {
       continue;
     }
 
-    if (TraitAPI::has(e, TRAIT_THREE_POINT_LIT))
+    DECLARE_TRAIT(THREE_POINT_LIT, "visual: drawn with the camera-relative key/fill/rim shader");
+    if (HAS_TRAIT(e, THREE_POINT_LIT))
       ThreePointLight::draw_model(e.model.model, entity_transform(e));
     else
       draw_model_normal(e.model.name, entity_transform(e));
 
-    if (TraitAPI::has(e, TRAIT_IS_HITBOX)) {
+    DECLARE_TRAIT(IS_HITBOX, "debug: draws its world bounding box in red");
+    if (HAS_TRAIT(e, IS_HITBOX)) {
       DrawBoundingBox(compute_world_bbox(e), RED);
     }
   }
@@ -894,7 +921,8 @@ inline void update() {
 
   RenderAPI::layer_start(RenderLayer::UI_World, ctx.camera);
   for (auto& e : ctx.entities) {
-    if (TraitAPI::has(e, TRAIT_IS_BILLBOARD)) {
+    DECLARE_TRAIT(IS_BILLBOARD, "visual: drawn as a camera-facing billboard in the UI_World layer");
+    if (HAS_TRAIT(e, IS_BILLBOARD)) {
       draw_model_billboard(e.model.name, e.position, e.scale, WHITE);
     }
   }
@@ -906,11 +934,13 @@ inline void update() {
   //
 
   for (auto& e : ctx.entities) {
-    if (!TraitAPI::has(e, TRAIT_IS_ANIMATION) || e.animation_id < 0)
+    DECLARE_TRAIT(IS_ANIMATION, "visual: draws animation_id as a screen-space frame sequence; no model");
+    if (!HAS_TRAIT(e, IS_ANIMATION) || e.animation_id < 0)
       continue;
     float elapsed = ((float)GetTime() - e.animation_start_time) * e.animation_speed;
 
-    bool looping = TraitAPI::has(e, TRAIT_IS_LOOPING);
+    DECLARE_TRAIT(IS_LOOPING, "the IS_ANIMATION frame sequence wraps instead of holding the last frame");
+    bool looping = HAS_TRAIT(e, IS_LOOPING);
 
     Texture2D* tex = AnimationRegistry::get_frame(e.animation_id, elapsed, looping);
     if (!tex)
@@ -924,11 +954,19 @@ inline void update() {
   }
 
   for (auto& e : ctx.entities) {
-    if (!TraitAPI::has(e, TRAIT_IS_TEXT))
+    DECLARE_TRAIT(IS_TEXT, "visual: fading screen-space label from log_text (spawn_label)");
+    if (!HAS_TRAIT(e, IS_TEXT))
       continue;
     Vector2 screen = GetWorldToScreen(e.position, ctx.camera);
     float alpha = Clamp(e.life_time / ctx.log_layout.fade_time_sec, 0.0f, 1.0f);
     DrawText(e.log_text.data(), (int)screen.x, (int)screen.y, 20, RED);
+  }
+
+  // hover card: a trait that also reads entity data (log_text), not just a bit
+  DECLARE_TRAIT(HOVER_CARD, "shows this entity's log_text in a card at the mouse while hovered");
+  if (auto& h = ctx.entities[get_hovered()]) {
+    if (HAS_TRAIT(h, HOVER_CARD))
+      draw_hover_card(h, frame.mouse);
   }
 }
 
@@ -1012,12 +1050,20 @@ inline void draw_imgui() {
       bool visible = sel.render.visible;
       if (ImGui::Checkbox("Visible", &visible))
         sel.render.visible = visible;
-      bool lit = TraitAPI::has(sel, TRAIT_THREE_POINT_LIT);
-      if (ImGui::Checkbox("Three-point lit", &lit)) {
-        if (lit)
-          TraitAPI::apply(sel, TRAIT_THREE_POINT_LIT);
-        else
-          TraitAPI::remove(sel, TRAIT_THREE_POINT_LIT);
+      ImGui::InputText("log_text", sel.log_text.data(), sel.log_text.size());
+      if (ImGui::TreeNodeEx("Traits", ImGuiTreeNodeFlags_DefaultOpen)) {
+        for (const auto& t : TRAIT_INFO) {
+          bool on = TraitAPI::has(sel, t.id);
+          if (ImGui::Checkbox(t.name, &on)) {
+            if (on)
+              TraitAPI::apply(sel, t.id);
+            else
+              TraitAPI::remove(sel, t.id);
+          }
+          if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s\n%s:%d", t.doc, t.file, t.line);
+        }
+        ImGui::TreePop();
       }
       ImGui::Separator();
       if (ImGui::Button("Delete")) {
@@ -1038,17 +1084,17 @@ inline void draw_imgui() {
       ThreePointLight::draw_imgui();
       int lit_count = 0;
       for (auto& e : ctx.entities)
-        if (TraitAPI::has(e, TRAIT_THREE_POINT_LIT))
+        if (HAS_TRAIT(e, THREE_POINT_LIT))
           lit_count++;
       ImGui::Text("Lit entities: %d / %zu", lit_count, entity_count());
       if (ImGui::Button("Apply to all")) {
         for (auto& e : ctx.entities)
-          TraitAPI::apply(e, TRAIT_THREE_POINT_LIT);
+          ADD_TRAIT(e, THREE_POINT_LIT);
       }
       ImGui::SameLine();
       if (ImGui::Button("Remove from all")) {
         for (auto& e : ctx.entities)
-          TraitAPI::remove(e, TRAIT_THREE_POINT_LIT);
+          RM_TRAIT(e, THREE_POINT_LIT);
       }
     }
 
@@ -1227,29 +1273,11 @@ int main() {
                        [](const std::string& msg) { GameConsoleAPI::print(msg); }, port);
   }
 
-  // TODO: the second I saw this i got annoyed, why the fuck is this not some config file
-
-  TraitAPI::register_trait(TRAIT_WSAD, wsad_init, wsad_update);
-
-  TraitAPI::register_trait(TRAIT_PICKUP, pickup_init, pickup_update);
-
-  TraitAPI::register_trait(TRAIT_CROSS_SLASH_HITBOX, pickup_init, pickup_update);
-
-  TraitAPI::register_trait(TRAIT_IS_HITBOX);
-
-  TraitAPI::register_trait(TRAIT_IS_TEXT);
-
-  TraitAPI::register_trait(TRAIT_IS_GRID_ALIGNED);
-
-  TraitAPI::register_trait(TRAIT_IS_PUSHABLE);
-
-  TraitAPI::register_trait("is_billboard");
-
-  TraitAPI::register_trait(TRAIT_IS_ANIMATION, animation_init, animation_update);
-
-  TraitAPI::register_trait(TRAIT_IS_LOOPING);
-
-  TraitAPI::register_trait(TRAIT_THREE_POINT_LIT);
+  // Traits themselves are generated (gen/entity_traits.gen.hpp); only behaviour hooks are wired here.
+  TraitAPI::set_hooks(TraitId::WSAD, wsad_init, wsad_update);
+  TraitAPI::set_hooks(TraitId::PICKUP, pickup_init, pickup_update);
+  TraitAPI::set_hooks(TraitId::CROSS_SLASH_HITBOX, pickup_init, pickup_update);
+  TraitAPI::set_hooks(TraitId::IS_ANIMATION, animation_init, animation_update);
 
   GameConsoleAPI::print("Press ~ for console.");
 

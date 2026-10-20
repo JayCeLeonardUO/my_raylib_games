@@ -187,11 +187,36 @@ function(game_embed_files GAME_NAME)
   endif()
 endfunction()
 
+# Generated trait struct: tools/gen_traits.py scans src/scratch/<game>/ for DECLARE_TRAIT /
+# HAS_TRAIT / ADD_TRAIT / RM_TRAIT tags and writes src/scratch/<game>/gen/entity_traits.gen.hpp.
+# The output is committed, so a machine without python3 still builds from the last generated file.
+find_package(Python3 COMPONENTS Interpreter)
+function(game_gen_traits GAME_NAME)
+  set(GAME_DIR ${CMAKE_SOURCE_DIR}/src/scratch/${GAME_NAME})
+  set(GEN_OUT ${GAME_DIR}/gen/entity_traits.gen.hpp)
+  file(GLOB_RECURSE SCAN CONFIGURE_DEPENDS
+    "${GAME_DIR}/*.cpp" "${GAME_DIR}/*.hpp" "${GAME_DIR}/*.inc")
+  list(FILTER SCAN EXCLUDE REGEX "/gen/")
+  if(Python3_Interpreter_FOUND)
+    add_custom_command(OUTPUT ${GEN_OUT}
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/gen_traits.py
+              --src ${GAME_DIR} --out ${GEN_OUT}
+      DEPENDS ${SCAN} ${CMAKE_SOURCE_DIR}/tools/gen_traits.py
+      COMMENT "gen_traits: ${GAME_NAME}"
+      VERBATIM)
+    add_custom_target(${GAME_NAME}_gen_traits DEPENDS ${GEN_OUT})
+    add_dependencies(${GAME_NAME} ${GAME_NAME}_gen_traits)
+  else()
+    message(WARNING "python3 not found: ${GAME_NAME} builds from the committed ${GEN_OUT}")
+  endif()
+endfunction()
+
 # Hex grid demo
 add_game(hexgrid_demo)
 
 # Entity demo (ilist + asset_helpers)
 add_game(entity_demo)
+game_gen_traits(entity_demo)
 target_link_libraries(entity_demo PRIVATE Boost::pfr lua_lib)
 game_embed_files(entity_demo
   assets/setup.lua

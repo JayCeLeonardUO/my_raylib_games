@@ -192,3 +192,10 @@ for i = 0, entity_count() - 1 do
 end
 light_scheme("Studio Neutral")
 console_print("three_point_lit applied to " .. entity_count() .. " entities")
+
+-- hover cards: every entity shows its log_text when hovered. only the anchor
+-- gets text set here, so the seeds show the Entity struct default on purpose.
+for i = 0, entity_count() - 1 do
+  trait_add(i, "hover_card")
+end
+set_text(16, "deck_anchor: text set from setup.lua via set_text()")

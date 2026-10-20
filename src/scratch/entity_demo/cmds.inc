@@ -21,7 +21,7 @@ REGISTER_CMD(spawn_player, "spawn_player <model> [x y z]", {
     return std::string("Failed");
   auto& e = GameCtxAPI::ctx.entities[ref];
   if (e)
-    TraitAPI::apply(e, TRAIT_WSAD);
+    ADD_TRAIT(e, WSAD);
   return "Spawned player " + name;
 });
 
@@ -43,7 +43,7 @@ REGISTER_CMD(spawn_pickup, "spawn_pickup <model> [x y z]", {
     return std::string("Failed");
   auto& e = GameCtxAPI::ctx.entities[ref];
   if (e)
-    TraitAPI::apply(e, TRAIT_PICKUP);
+    ADD_TRAIT(e, PICKUP);
   return "Spawned pickup " + name;
 });
 
@@ -147,9 +147,8 @@ REGISTER_CMD(trait_add, "trait_add <n> — apply trait to selected", {
   auto& sel = GameCtxAPI::ctx.entities[GameCtxAPI::ctx.selected];
   if (!sel)
     return std::string("Nothing selected");
-  if (TraitAPI::find(args[0].c_str()) < 0)
+  if (!TraitAPI::apply(sel, args[0].c_str()))
     return "Unknown trait: " + args[0];
-  TraitAPI::apply(sel, args[0].c_str());
   return "Applied " + args[0];
 });
 
@@ -160,7 +159,8 @@ REGISTER_CMD(trait_rm, "trait_rm <n> — remove trait from selected", {
   auto& sel = GameCtxAPI::ctx.entities[GameCtxAPI::ctx.selected];
   if (!sel)
     return std::string("Nothing selected");
-  TraitAPI::remove(sel, args[0].c_str());
+  if (!TraitAPI::remove(sel, args[0].c_str()))
+    return "Unknown trait: " + args[0];
   return "Removed " + args[0];
 });
 

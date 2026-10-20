@@ -127,17 +127,6 @@ static int l_load_primitive(lua_State* L) {
   return 1;
 }
 
-// register_trait(name)
-static int l_register_trait(lua_State* L) {
-  const char* name = luaL_checkstring(L, 1);
-  int slot = TraitAPI::register_trait(name);
-  if (slot < 0)
-    LuaAPI::log("lua: register_trait: trait table full (MAX_TRAITS), could not add " +
-                          std::string(name));
-  lua_pushinteger(L, slot);
-  return 1;
-}
-
 // console_print(msg)
 static int l_console_print(lua_State* L) {
   const char* msg = luaL_checkstring(L, 1);
@@ -153,8 +142,10 @@ static int l_trait_add(lua_State* L) {
   int i = 0;
   for (auto& e : GameCtxAPI::ctx.entities) {
     if (i == idx) {
-      TraitAPI::apply(e, trait);
-      lua_pushboolean(L, true);
+      bool ok = TraitAPI::apply(e, trait);
+      if (!ok)
+        LuaAPI::log("lua: trait_add: unknown trait '" + std::string(trait) + "'");
+      lua_pushboolean(L, ok);
       return 1;
     }
     i++;
@@ -171,8 +162,10 @@ static int l_trait_rm(lua_State* L) {
   int i = 0;
   for (auto& e : GameCtxAPI::ctx.entities) {
     if (i == idx) {
-      TraitAPI::remove(e, trait);
-      lua_pushboolean(L, true);
+      bool ok = TraitAPI::remove(e, trait);
+      if (!ok)
+        LuaAPI::log("lua: trait_rm: unknown trait '" + std::string(trait) + "'");
+      lua_pushboolean(L, ok);
       return 1;
     }
     i++;
@@ -209,6 +202,24 @@ static int l_color(lua_State* L) {
   m->materials[0].maps[MATERIAL_MAP_DIFFUSE].color = {(unsigned char)r, (unsigned char)g,
                                                       (unsigned char)b, 255};
   lua_pushboolean(L, true);
+  return 1;
+}
+
+// set_text(entity_index, text) -> bool
+static int l_set_text(lua_State* L) {
+  int idx = (int)luaL_checkinteger(L, 1);
+  const char* text = luaL_checkstring(L, 2);
+
+  int i = 0;
+  for (auto& e : GameCtxAPI::ctx.entities) {
+    if (i == idx) {
+      snprintf(e.log_text.data(), e.log_text.size(), "%s", text);
+      lua_pushboolean(L, true);
+      return 1;
+    }
+    i++;
+  }
+  lua_pushboolean(L, false);
   return 1;
 }
 
@@ -270,9 +281,9 @@ static int l_spawn_animation(lua_State* L) {
     return 1;
   }
 
-  // animation entities use TRAIT_NO_MODEL — they draw via texture, not model
+  // animation entities have no model (NO_MODEL_NAME); they draw via texture
   auto ref = GameCtxAPI::spawn(GameCtxAPI::SpawnArgs{
-      .model_name = TRAIT_NO_MODEL, .pos = {x, y, z}, .scale = scale, .debug_name = "animation"});
+      .model_name = NO_MODEL_NAME, .pos = {x, y, z}, .scale = scale, .debug_name = "animation"});
   if (ref.kind == ilist_kind::nil) {
     lua_pushboolean(L, false);
     return 1;
@@ -280,10 +291,10 @@ static int l_spawn_animation(lua_State* L) {
 
   auto& ent = GameCtxAPI::ctx.entities[ref];
   ent.animation_id = anim_id;
-  TraitAPI::apply(ent, TRAIT_IS_ANIMATION);
+  ADD_TRAIT(ent, IS_ANIMATION);
 
   if (looping)
-    TraitAPI::apply(ent, TRAIT_IS_LOOPING);
+    ADD_TRAIT(ent, IS_LOOPING);
 
   lua_pushboolean(L, true);
   return 1;
@@ -524,7 +535,7 @@ static int l_particles(lua_State* L) {
 inline const LuaAPI::Binding BINDINGS[] = {
     // --- discovery ---
     {"entities", l_entities, "entities()", "list live entities: index, model, position, traits"},
-    {"traits", l_traits, "traits()", "list registered trait names"},
+    {"traits", l_traits, "traits()", "list traits: name, doc, where declared"},
     {"models", l_models, "models()", "list loaded model names"},
     {"entity_count", l_entity_count, "entity_count()", "number of live entities"},
     {"model_count", l_model_count, "model_count()", "number of loaded models"},
@@ -539,14 +550,14 @@ inline const LuaAPI::Binding BINDINGS[] = {
     {"spawn_child", l_spawn_child, "spawn_child(parent_index, model_name, [x], [y], [z], [scale])",
      "spawn attached to a parent entity"},
     {"clear", l_clear, "clear()", "remove all entities (indices reset)"},
+    {"set_text", l_set_text, "set_text(index, text) -> bool",
+     "set the entity's log_text (shown by hover_card and is_text)"},
     {"set_flag", l_set_flag, "set_flag(index, flag, bool)",
      "flags: is_draggable is_collidable is_highlightable"},
     // --- traits ---
     {"trait_add", l_trait_add, "trait_add(index, trait_name) -> bool",
-     "attach a registered trait; false if the index is bad (unknown names are ignored)"},
+     "attach a trait; false if the index or the name is unknown (see traits())"},
     {"trait_rm", l_trait_rm, "trait_rm(index, trait_name) -> bool", "detach a trait"},
-    {"register_trait", l_register_trait, "register_trait(name) -> slot",
-     "add a new tag-only trait (no C++ behavior); -1 if the table is full"},
     // --- animation ---
     {"register_animation", l_register_animation, "register_animation(name, dir_path, frame_duration)",
      "register a frame-sequence animation from a directory of images"},
