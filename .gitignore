@@ -38,3 +38,4 @@ build_web/
 
 # ...but keep Emscripten shell templates (build inputs, not generated output)
 !**/src/shell.html
+!src/web/shell.html

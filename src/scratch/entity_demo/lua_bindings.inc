@@ -127,17 +127,6 @@ static int l_load_primitive(lua_State* L) {
   return 1;
 }
 
-// register_trait(name)
-static int l_register_trait(lua_State* L) {
-  const char* name = luaL_checkstring(L, 1);
-  int slot = TraitAPI::register_trait(name);
-  if (slot < 0)
-    LuaAPI::log("lua: register_trait: trait table full (MAX_TRAITS), could not add " +
-                          std::string(name));
-  lua_pushinteger(L, slot);
-  return 1;
-}
-
 // console_print(msg)
 static int l_console_print(lua_State* L) {
   const char* msg = luaL_checkstring(L, 1);
@@ -153,8 +142,10 @@ static int l_trait_add(lua_State* L) {
   int i = 0;
   for (auto& e : GameCtxAPI::ctx.entities) {
     if (i == idx) {
-      TraitAPI::apply(e, trait);
-      lua_pushboolean(L, true);
+      bool ok = TraitAPI::apply(e, trait);
+      if (!ok)
+        LuaAPI::log("lua: trait_add: unknown trait '" + std::string(trait) + "'");
+      lua_pushboolean(L, ok);
       return 1;
     }
     i++;
@@ -171,8 +162,10 @@ static int l_trait_rm(lua_State* L) {
   int i = 0;
   for (auto& e : GameCtxAPI::ctx.entities) {
     if (i == idx) {
-      TraitAPI::remove(e, trait);
-      lua_pushboolean(L, true);
+      bool ok = TraitAPI::remove(e, trait);
+      if (!ok)
+        LuaAPI::log("lua: trait_rm: unknown trait '" + std::string(trait) + "'");
+      lua_pushboolean(L, ok);
       return 1;
     }
     i++;
@@ -209,6 +202,24 @@ static int l_color(lua_State* L) {
   m->materials[0].maps[MATERIAL_MAP_DIFFUSE].color = {(unsigned char)r, (unsigned char)g,
                                                       (unsigned char)b, 255};
   lua_pushboolean(L, true);
+  return 1;
+}
+
+// set_text(entity_index, text) -> bool
+static int l_set_text(lua_State* L) {
+  int idx = (int)luaL_checkinteger(L, 1);
+  const char* text = luaL_checkstring(L, 2);
+
+  int i = 0;
+  for (auto& e : GameCtxAPI::ctx.entities) {
+    if (i == idx) {
+      snprintf(e.log_text.data(), e.log_text.size(), "%s", text);
+      lua_pushboolean(L, true);
+      return 1;
+    }
+    i++;
+  }
+  lua_pushboolean(L, false);
   return 1;
 }
 
@@ -270,9 +281,9 @@ static int l_spawn_animation(lua_State* L) {
     return 1;
   }
 
-  // animation entities use TRAIT_NO_MODEL — they draw via texture, not model
+  // animation entities have no model (NO_MODEL_NAME); they draw via texture
   auto ref = GameCtxAPI::spawn(GameCtxAPI::SpawnArgs{
-      .model_name = TRAIT_NO_MODEL, .pos = {x, y, z}, .scale = scale, .debug_name = "animation"});
+      .model_name = NO_MODEL_NAME, .pos = {x, y, z}, .scale = scale, .debug_name = "animation"});
   if (ref.kind == ilist_kind::nil) {
     lua_pushboolean(L, false);
     return 1;
@@ -280,10 +291,10 @@ static int l_spawn_animation(lua_State* L) {
 
   auto& ent = GameCtxAPI::ctx.entities[ref];
   ent.animation_id = anim_id;
-  TraitAPI::apply(ent, TRAIT_IS_ANIMATION);
+  ADD_TRAIT(ent, IS_ANIMATION);
 
   if (looping)
-    TraitAPI::apply(ent, TRAIT_IS_LOOPING);
+    ADD_TRAIT(ent, IS_LOOPING);
 
   lua_pushboolean(L, true);
   return 1;
@@ -330,8 +341,23 @@ static int l_light_scheme(lua_State* L) {
   return 1;
 }
 
-// light_intensity([x]) -> current master intensity; with a number, sets it
+// light_intensity([x]) -> master intensity; with a number, sets it.
+// light_intensity(light, [x]) -> that light's intensity; light is key, fill, rim or ambient.
 static int l_light_intensity(lua_State* L) {
+  if (lua_type(L, 1) == LUA_TSTRING) {
+    const char* name = lua_tostring(L, 1);
+    float* v = ThreePointLight::intensity_of(name);
+    if (!v) {
+      LuaAPI::log("lua: light_intensity: unknown light: " + std::string(name) +
+                  " (key, fill, rim, ambient)");
+      lua_pushboolean(L, false);
+      return 1;
+    }
+    if (lua_gettop(L) >= 2)
+      *v = (float)luaL_checknumber(L, 2);
+    lua_pushnumber(L, *v);
+    return 1;
+  }
   if (lua_gettop(L) >= 1)
     ThreePointLight::master_intensity = (float)luaL_checknumber(L, 1);
   lua_pushnumber(L, ThreePointLight::master_intensity);
@@ -490,13 +516,116 @@ static int l_add_to_group(lua_State* L) {
   return 1;
 }
 
+// depth_view([on], [far]) -> on, far. Show linear depth instead of the color layers.
+static int l_depth_view(lua_State* L) {
+  if (lua_gettop(L) >= 1)
+    RenderAPI::depth_view = lua_toboolean(L, 1) && RenderAPI::depth_available();
+  if (lua_gettop(L) >= 2)
+    RenderAPI::depth_vis_far = (float)luaL_checknumber(L, 2);
+  lua_pushboolean(L, RenderAPI::depth_view);
+  lua_pushnumber(L, RenderAPI::depth_vis_far);
+  return 2;
+}
+
+// dof([on], [focus], [strength], [max_radius]) -> on, focus, strength, max_radius.
+// Depth-of-field blur: radius_px = |view_depth - focus| * strength, clamped to max_radius.
+static int l_dof(lua_State* L) {
+  if (lua_gettop(L) >= 1)
+    RenderAPI::dof_enabled = lua_toboolean(L, 1) && RenderAPI::dof_available();
+  if (lua_gettop(L) >= 2)
+    RenderAPI::dof_focus = (float)luaL_checknumber(L, 2);
+  if (lua_gettop(L) >= 3)
+    RenderAPI::dof_strength = (float)luaL_checknumber(L, 3);
+  if (lua_gettop(L) >= 4)
+    RenderAPI::dof_max_radius = (float)luaL_checknumber(L, 4);
+  lua_pushboolean(L, RenderAPI::dof_enabled);
+  lua_pushnumber(L, RenderAPI::dof_focus);
+  lua_pushnumber(L, RenderAPI::dof_strength);
+  lua_pushnumber(L, RenderAPI::dof_max_radius);
+  return 4;
+}
+
+// dof_focus(index) -> focus. Put the focus distance on an entity (its view-axis depth).
+static int l_dof_focus(lua_State* L) {
+  int idx = (int)luaL_checkinteger(L, 1);
+  thing_ref ref = entity_ref_from_index(idx);
+  if (ref == thing_ref::get_nil_ref()) {
+    LuaAPI::log("lua: dof_focus: invalid entity index");
+    lua_pushnumber(L, -1);
+    return 1;
+  }
+  RenderAPI::dof_focus = GameCtxAPI::view_depth_of(GameCtxAPI::ctx.entities[ref].position);
+  lua_pushnumber(L, RenderAPI::dof_focus);
+  return 1;
+}
+
+// dof_show_radius([on]) -> on. Debug: draw the blur radius (black = in focus) instead of the scene.
+static int l_dof_show_radius(lua_State* L) {
+  if (lua_gettop(L) >= 1)
+    RenderAPI::dof_show_radius = lua_toboolean(L, 1);
+  lua_pushboolean(L, RenderAPI::dof_show_radius);
+  return 1;
+}
+
+// sun([x, y, z]) -> x, y, z. Get or set the glint sun position (world space).
+static int l_sun(lua_State* L) {
+  auto& g = GameCtxAPI::glints;
+  if (lua_gettop(L) >= 3)
+    g.sun_pos = {(float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2),
+                 (float)luaL_checknumber(L, 3)};
+  lua_pushnumber(L, g.sun_pos.x);
+  lua_pushnumber(L, g.sun_pos.y);
+  lua_pushnumber(L, g.sun_pos.z);
+  return 3;
+}
+
+// glints([mode]) -> visible, mode. mode is "gpu" or "cpu"; visible is last frame's glint count.
+static int l_glints(lua_State* L) {
+  auto& g = GameCtxAPI::glints;
+  if (lua_gettop(L) >= 1) {
+    const char* mode = luaL_checkstring(L, 1);
+    if (strcmp(mode, "gpu") == 0)
+      g.use_gpu = true;
+    else if (strcmp(mode, "cpu") == 0)
+      g.use_gpu = false;
+    else
+      LuaAPI::log("lua: glints: mode must be \"gpu\" or \"cpu\"");
+  }
+  lua_pushinteger(L, g.visible);
+  lua_pushstring(L, g.gpu_active() ? "gpu" : "cpu");
+  return 2;
+}
+
+// glint_check() -> max_px_error, mismatches. Runs GPU and CPU on the same particles.
+static int l_glint_check(lua_State* L) {
+  int bad = 0;
+  float err = GameCtxAPI::glints.compare_gpu_cpu(GameCtxAPI::particles.transforms, GameCtxAPI::ctx.camera,
+                                                 GetScreenWidth(), GetScreenHeight(), &bad);
+  lua_pushnumber(L, err);
+  lua_pushinteger(L, bad);
+  return 2;
+}
+
+// particles([count]) -> count. Get or set how many tumbling triangles are drawn (0 hides them).
+static int l_particles(lua_State* L) {
+  auto& ps = GameCtxAPI::particles;
+  if (lua_gettop(L) >= 1) {
+    ps.count = (int)luaL_checkinteger(L, 1);
+    if (ps.count < 0)
+      ps.count = 0;
+    ps.respawn();
+  }
+  lua_pushinteger(L, ps.count);
+  return 1;
+}
+
 // ---- binding table ----
 // Single source of truth for what this game exposes. help() prints it; register_lua_bindings()
 // registers it with the VM. `help` and `print` are provided by LuaAPI itself.
 inline const LuaAPI::Binding BINDINGS[] = {
     // --- discovery ---
     {"entities", l_entities, "entities()", "list live entities: index, model, position, traits"},
-    {"traits", l_traits, "traits()", "list registered trait names"},
+    {"traits", l_traits, "traits()", "list traits: name, doc, where declared"},
     {"models", l_models, "models()", "list loaded model names"},
     {"entity_count", l_entity_count, "entity_count()", "number of live entities"},
     {"model_count", l_model_count, "model_count()", "number of loaded models"},
@@ -511,14 +640,14 @@ inline const LuaAPI::Binding BINDINGS[] = {
     {"spawn_child", l_spawn_child, "spawn_child(parent_index, model_name, [x], [y], [z], [scale])",
      "spawn attached to a parent entity"},
     {"clear", l_clear, "clear()", "remove all entities (indices reset)"},
+    {"set_text", l_set_text, "set_text(index, text) -> bool",
+     "set the entity's log_text (shown by hover_card and is_text)"},
     {"set_flag", l_set_flag, "set_flag(index, flag, bool)",
      "flags: is_draggable is_collidable is_highlightable"},
     // --- traits ---
     {"trait_add", l_trait_add, "trait_add(index, trait_name) -> bool",
-     "attach a registered trait; false if the index is bad (unknown names are ignored)"},
+     "attach a trait; false if the index or the name is unknown (see traits())"},
     {"trait_rm", l_trait_rm, "trait_rm(index, trait_name) -> bool", "detach a trait"},
-    {"register_trait", l_register_trait, "register_trait(name) -> slot",
-     "add a new tag-only trait (no C++ behavior); -1 if the table is full"},
     // --- animation ---
     {"register_animation", l_register_animation, "register_animation(name, dir_path, frame_duration)",
      "register a frame-sequence animation from a directory of images"},
@@ -532,13 +661,30 @@ inline const LuaAPI::Binding BINDINGS[] = {
     {"add_to_group", l_add_to_group, "add_to_group(index, group_name)", "link an entity into a group"},
     // --- lighting (entities need the "three_point_lit" trait) ---
     {"light_scheme", l_light_scheme, "light_scheme([name]) -> name",
-     "get/set the three-point scheme: Studio Neutral, Warm Key / Cool Fill, Cool Key / Warm Fill, Golden Hour, Moonlight, Overcast Soft"},
-    {"light_intensity", l_light_intensity, "light_intensity([x]) -> x", "get/set master lighting intensity (1.0 default)"},
+     "get/set the three-point scheme: Studio Neutral, Warm Key / Cool Fill, Cool Key / Warm Fill, Golden Hour, Moonlight, Overcast Soft, Forest"},
+    {"light_intensity", l_light_intensity, "light_intensity([x]) | light_intensity(light, [x]) -> x",
+     "get/set master intensity, or one light's: key fill rim ambient"},
+    // --- particles ---
+    // --- effects ---
+    {"sun", l_sun, "sun([x, y, z]) -> x, y, z", "get/set the world-space sun the glints reflect"},
+    {"glints", l_glints, "glints([\"gpu\"|\"cpu\"]) -> visible, mode",
+     "glint count from the last frame; optionally switch the compute path"},
+    {"glint_check", l_glint_check, "glint_check() -> max_px_error, mismatches",
+     "run the compute shader and the CPU path on the same frame; -1 if no GPU"},
+    {"particles", l_particles, "particles([count]) -> count",
+     "how many tumbling triangle particles are drawn (one instanced call); 0 hides them"},
     // --- camera ---
     {"camera", l_camera, "camera([x, y, z, [tx, ty, tz]]) -> pos, target",
      "get or set the camera position and look-at target"},
     // --- output ---
     {"screenshot", l_screenshot, "screenshot([path]) -> path", "save a PNG of the next frame (default screenshot.png)"},
+    {"depth_view", l_depth_view, "depth_view([on], [far]) -> on, far",
+     "dev: draw linear scene depth (black near, white at `far` units) instead of the color layers"},
+    {"dof", l_dof, "dof([on], [focus], [strength], [max_radius]) -> on, focus, strength, max_radius",
+     "depth-of-field blur: radius_px = |depth - focus| * strength, clamped to max_radius"},
+    {"dof_focus", l_dof_focus, "dof_focus(index) -> focus", "set the blur focus to an entity's view depth"},
+    {"dof_show_radius", l_dof_show_radius, "dof_show_radius([on]) -> on",
+     "dev: draw the blur radius as gray (black = in focus) instead of the blurred scene"},
     {"console_print", l_console_print, "console_print(msg)", "print a single string to the game console"},
 };
 

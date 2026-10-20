@@ -33,6 +33,14 @@ FetchContent_Declare(
 )
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
+if(EMSCRIPTEN)
+  # web build: raylib targets WebGL 1 (OpenGL ES 2.0) and Emscripten's GLFW shim
+  set(PLATFORM "Web" CACHE STRING "" FORCE)
+else()
+  # desktop: OpenGL 4.3 core so rlgl's compute shader + SSBO functions are real
+  # (under the default 3.3 they log "SSBO not enabled" and return 0). The 330 shaders still work.
+  set(OPENGL_VERSION "4.3" CACHE STRING "" FORCE)
+endif()
 FetchContent_MakeAvailable(raylib)
 
 # Dear ImGui (C++ version - docking branch for rlImGui compatibility)
@@ -57,22 +65,26 @@ if(NOT rlimgui_POPULATED)
   FetchContent_Populate(rlimgui)
 endif()
 
-# Google Test
-FetchContent_Declare(
-  googletest
-  GIT_REPOSITORY https://github.com/google/googletest.git
-  GIT_TAG release-1.12.1
-)
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(googletest)
+# Google Test (native only)
+if(NOT EMSCRIPTEN)
+  FetchContent_Declare(
+    googletest
+    GIT_REPOSITORY https://github.com/google/googletest.git
+    GIT_TAG release-1.12.1
+  )
+  set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(googletest)
+endif()
 
-# Doctest
-FetchContent_Declare(
-  doctest
-  GIT_REPOSITORY https://github.com/doctest/doctest.git
-  GIT_TAG v2.4.11
-)
-FetchContent_MakeAvailable(doctest)
+# Doctest (native only)
+if(NOT EMSCRIPTEN)
+  FetchContent_Declare(
+    doctest
+    GIT_REPOSITORY https://github.com/doctest/doctest.git
+    GIT_TAG v2.4.11
+  )
+  FetchContent_MakeAvailable(doctest)
+endif()
 
 # Boost.PFR (reflection library)
 FetchContent_Declare(
@@ -96,7 +108,8 @@ if(NOT lua_POPULATED)
   add_library(lua_lib STATIC ${LUA_SOURCES})
   target_include_directories(lua_lib PUBLIC ${lua_SOURCE_DIR})
   set_target_properties(lua_lib PROPERTIES LINKER_LANGUAGE C)
-  if(UNIX)
+  if(UNIX AND NOT EMSCRIPTEN)
+    # Emscripten's libc lacks the popen/mkstemp family LUA_USE_POSIX turns on
     target_compile_definitions(lua_lib PRIVATE LUA_USE_POSIX)
     target_link_libraries(lua_lib PRIVATE m)
   endif()
@@ -152,6 +165,53 @@ function(add_game GAME_NAME)
     if(UNIX AND NOT APPLE)
       target_link_libraries(${GAME_NAME} PRIVATE stdc++)
     endif()
+    if(EMSCRIPTEN)
+      # one self-contained <game>.html; see src/web/ for the page template
+      set_target_properties(${GAME_NAME} PROPERTIES SUFFIX ".html")
+      target_link_options(${GAME_NAME} PRIVATE
+        -sUSE_GLFW=3
+        -sALLOW_MEMORY_GROWTH=1
+        -sGL_ENABLE_GET_PROC_ADDRESS=1
+        -sSINGLE_FILE=1
+        --shell-file ${CMAKE_SOURCE_DIR}/src/web/shell.html
+        --pre-js ${CMAKE_SOURCE_DIR}/src/web/pre.js
+      )
+    endif()
+  endif()
+endfunction()
+
+# Files a web build bakes into the virtual filesystem, at the same relative path the
+# desktop build reads them from. Keep this to what the game actually opens: assets/ is
+# hundreds of MB and would all end up inside the HTML.
+function(game_embed_files GAME_NAME)
+  if(EMSCRIPTEN)
+    foreach(f ${ARGN})
+      target_link_options(${GAME_NAME} PRIVATE "SHELL:--embed-file ${CMAKE_SOURCE_DIR}/${f}@${f}")
+    endforeach()
+  endif()
+endfunction()
+
+# Generated trait struct: tools/gen_traits.py scans src/scratch/<game>/ for DECLARE_TRAIT /
+# HAS_TRAIT / ADD_TRAIT / RM_TRAIT tags and writes src/scratch/<game>/gen/entity_traits.gen.hpp.
+# The output is committed, so a machine without python3 still builds from the last generated file.
+find_package(Python3 COMPONENTS Interpreter)
+function(game_gen_traits GAME_NAME)
+  set(GAME_DIR ${CMAKE_SOURCE_DIR}/src/scratch/${GAME_NAME})
+  set(GEN_OUT ${GAME_DIR}/gen/entity_traits.gen.hpp)
+  file(GLOB_RECURSE SCAN CONFIGURE_DEPENDS
+    "${GAME_DIR}/*.cpp" "${GAME_DIR}/*.hpp" "${GAME_DIR}/*.inc")
+  list(FILTER SCAN EXCLUDE REGEX "/gen/")
+  if(Python3_Interpreter_FOUND)
+    add_custom_command(OUTPUT ${GEN_OUT}
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/gen_traits.py
+              --src ${GAME_DIR} --out ${GEN_OUT}
+      DEPENDS ${SCAN} ${CMAKE_SOURCE_DIR}/tools/gen_traits.py
+      COMMENT "gen_traits: ${GAME_NAME}"
+      VERBATIM)
+    add_custom_target(${GAME_NAME}_gen_traits DEPENDS ${GEN_OUT})
+    add_dependencies(${GAME_NAME} ${GAME_NAME}_gen_traits)
+  else()
+    message(WARNING "python3 not found: ${GAME_NAME} builds from the committed ${GEN_OUT}")
   endif()
 endfunction()
 
@@ -160,7 +220,14 @@ add_game(hexgrid_demo)
 
 # Entity demo (ilist + asset_helpers)
 add_game(entity_demo)
+game_gen_traits(entity_demo)
 target_link_libraries(entity_demo PRIVATE Boost::pfr lua_lib)
+game_embed_files(entity_demo
+  assets/setup.lua
+  assets/shaders/three_point_es100.vs
+  assets/shaders/three_point_es100.fs
+  assets/shaders/three_point_instanced_es100.vs
+)
 
 # ImGui prototype
 add_game(imgui_prototype)
@@ -176,12 +243,14 @@ add_game(glb_hotload)
 # TESTS
 # ============================================================================
 
-# Doctest runner for mylibs (with Raylib/ImGui for visual tests)
-add_executable(mylibs_tests src/mylibs/tests_main.cpp)
-target_include_directories(mylibs_tests PRIVATE src/mylibs ${imgui_SOURCE_DIR})
-target_link_libraries(mylibs_tests PRIVATE doctest::doctest raylib imgui_lib rlimgui_lib lua_lib)
-if(UNIX AND NOT APPLE)
-  target_link_libraries(mylibs_tests PRIVATE stdc++)
+# Doctest runner for mylibs (with Raylib/ImGui for visual tests), native only
+if(NOT EMSCRIPTEN)
+  add_executable(mylibs_tests src/mylibs/tests_main.cpp)
+  target_include_directories(mylibs_tests PRIVATE src/mylibs ${imgui_SOURCE_DIR})
+  target_link_libraries(mylibs_tests PRIVATE doctest::doctest raylib imgui_lib rlimgui_lib lua_lib)
+  if(UNIX AND NOT APPLE)
+    target_link_libraries(mylibs_tests PRIVATE stdc++)
+  endif()
 endif()
 
 # ============================================================================

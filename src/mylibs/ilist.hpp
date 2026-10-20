@@ -54,7 +54,17 @@ template <typename T, size_t N> struct things_list {
   using ref = thing_ref;
   using thing = T;
 
-  T& operator[](thing_ref ref) { return things[ref.idx]; };
+  /// A ref resolves only if it is non-nil, in range, points at a live slot, and carries
+  /// that slot's current generation (so refs to removed-and-reused slots are stale).
+  bool valid(thing_ref ref) const {
+    return ref.kind != Kinds::nil && ref.idx >= 0 && ref.idx < (int)N && used[ref.idx] &&
+           gen_id[ref.idx] == ref.gen_id;
+  }
+
+  /// Nil and stale refs resolve to a sentinel whose kind is nil, so
+  /// `if (auto& x = list[ref])` is false for them instead of aliasing slot 0.
+  /// Writes through the sentinel are discarded (it is reset on every lookup).
+  T& operator[](thing_ref ref) { return valid(ref) ? things[ref.idx] : nil_thing(); }
 
   /**
    * @brief Iterator for iterating over active items
@@ -179,7 +189,7 @@ template <typename T, size_t N> struct things_list {
     free_head.kind = Kinds::nil;
   }
 
-  T& get(thing_ref ref) { return things[ref.idx]; }
+  T& get(thing_ref ref) { return (*this)[ref]; }
 
   /**
    * @brief Add a new item to the list
@@ -217,6 +227,12 @@ private:
   bool used[N];
   thing_ref free_head;
   T things[N];
+
+  static T& nil_thing() {
+    static T sentinel{};
+    sentinel = T{}; // drop anything a caller wrote through a failed lookup
+    return sentinel;
+  }
 
   void _sublist_remove(T& slot) {
     if (slot.next.kind != Kinds::nil)
@@ -278,15 +294,20 @@ TEST_CASE("things_list thing_ref default state") {
   CHECK(ref.idx == 0);
 }
 
-TEST_CASE("things_list access by index") {
+TEST_CASE("things_list access by ref") {
   things_list<Enemy, 100> enemies;
 
-  thing_ref ref;
-  ref.idx = 0;
+  thing_ref ref = enemies.add(Enemy{0.0f, 0.0f, 10});
+  CHECK(ref.idx == 0);
 
   auto& thing = enemies[ref];
   thing.health = 50;
+  CHECK(enemies[ref].health == 50);
 
+  // a ref that only carries the index (no kind/generation) does not resolve
+  thing_ref bare;
+  bare.idx = 0;
+  CHECK_FALSE(bool(enemies[bare]));
   CHECK(enemies[ref].health == 50);
 }
 
@@ -363,6 +384,39 @@ TEST_CASE("things_list remove") {
   CHECK(enemies[rd].health == 40);
   CHECK(enemies[re].health == 50);
   CHECK(enemies[rf].health == 60);
+}
+
+TEST_CASE("things_list nil and stale refs do not alias slot 0") {
+  things_list<Enemy, 4> enemies;
+  thing_ref a = enemies.add(Enemy{1.0f, 1.0f, 10});
+  CHECK(a.idx == 0);
+  CHECK(bool(enemies[a]));
+  CHECK(enemies.valid(a));
+
+  // nil ref: kind nil, idx 0 -- must not resolve to the live entity in slot 0
+  thing_ref nil = thing_ref::get_nil_ref();
+  CHECK_FALSE(enemies.valid(nil));
+  CHECK_FALSE(bool(enemies[nil]));
+  CHECK(enemies[nil].health != 10);
+
+  // writing through a failed lookup does not touch slot 0
+  enemies[nil].health = 999;
+  CHECK(enemies[a].health == 10);
+  CHECK(enemies[nil].health != 999); // sentinel is reset per lookup
+
+  // stale ref: slot removed and reused by another item
+  enemies.remove(a);
+  CHECK_FALSE(enemies.valid(a));
+  CHECK_FALSE(bool(enemies[a]));
+  thing_ref b = enemies.add(Enemy{2.0f, 2.0f, 20});
+  CHECK(b.idx == a.idx);
+  CHECK(b.gen_id != a.gen_id);
+  CHECK_FALSE(enemies.valid(a));
+  CHECK_FALSE(bool(enemies[a]));
+  CHECK(enemies[b].health == 20);
+
+  // out of range
+  CHECK_FALSE(enemies.valid(thing_ref{ilist_kind::item, b.gen_id, 99}));
 }
 
 TEST_CASE("things_list clear and re-add") {
