@@ -516,6 +516,96 @@ static int l_add_to_group(lua_State* L) {
   return 1;
 }
 
+// depth_view([on], [far]) -> on, far. Show linear depth instead of the color layers.
+static int l_depth_view(lua_State* L) {
+  if (lua_gettop(L) >= 1)
+    RenderAPI::depth_view = lua_toboolean(L, 1) && RenderAPI::depth_available();
+  if (lua_gettop(L) >= 2)
+    RenderAPI::depth_vis_far = (float)luaL_checknumber(L, 2);
+  lua_pushboolean(L, RenderAPI::depth_view);
+  lua_pushnumber(L, RenderAPI::depth_vis_far);
+  return 2;
+}
+
+// dof([on], [focus], [strength], [max_radius]) -> on, focus, strength, max_radius.
+// Depth-of-field blur: radius_px = |view_depth - focus| * strength, clamped to max_radius.
+static int l_dof(lua_State* L) {
+  if (lua_gettop(L) >= 1)
+    RenderAPI::dof_enabled = lua_toboolean(L, 1) && RenderAPI::dof_available();
+  if (lua_gettop(L) >= 2)
+    RenderAPI::dof_focus = (float)luaL_checknumber(L, 2);
+  if (lua_gettop(L) >= 3)
+    RenderAPI::dof_strength = (float)luaL_checknumber(L, 3);
+  if (lua_gettop(L) >= 4)
+    RenderAPI::dof_max_radius = (float)luaL_checknumber(L, 4);
+  lua_pushboolean(L, RenderAPI::dof_enabled);
+  lua_pushnumber(L, RenderAPI::dof_focus);
+  lua_pushnumber(L, RenderAPI::dof_strength);
+  lua_pushnumber(L, RenderAPI::dof_max_radius);
+  return 4;
+}
+
+// dof_focus(index) -> focus. Put the focus distance on an entity (its view-axis depth).
+static int l_dof_focus(lua_State* L) {
+  int idx = (int)luaL_checkinteger(L, 1);
+  thing_ref ref = entity_ref_from_index(idx);
+  if (ref == thing_ref::get_nil_ref()) {
+    LuaAPI::log("lua: dof_focus: invalid entity index");
+    lua_pushnumber(L, -1);
+    return 1;
+  }
+  RenderAPI::dof_focus = GameCtxAPI::view_depth_of(GameCtxAPI::ctx.entities[ref].position);
+  lua_pushnumber(L, RenderAPI::dof_focus);
+  return 1;
+}
+
+// dof_show_radius([on]) -> on. Debug: draw the blur radius (black = in focus) instead of the scene.
+static int l_dof_show_radius(lua_State* L) {
+  if (lua_gettop(L) >= 1)
+    RenderAPI::dof_show_radius = lua_toboolean(L, 1);
+  lua_pushboolean(L, RenderAPI::dof_show_radius);
+  return 1;
+}
+
+// sun([x, y, z]) -> x, y, z. Get or set the glint sun position (world space).
+static int l_sun(lua_State* L) {
+  auto& g = GameCtxAPI::glints;
+  if (lua_gettop(L) >= 3)
+    g.sun_pos = {(float)luaL_checknumber(L, 1), (float)luaL_checknumber(L, 2),
+                 (float)luaL_checknumber(L, 3)};
+  lua_pushnumber(L, g.sun_pos.x);
+  lua_pushnumber(L, g.sun_pos.y);
+  lua_pushnumber(L, g.sun_pos.z);
+  return 3;
+}
+
+// glints([mode]) -> visible, mode. mode is "gpu" or "cpu"; visible is last frame's glint count.
+static int l_glints(lua_State* L) {
+  auto& g = GameCtxAPI::glints;
+  if (lua_gettop(L) >= 1) {
+    const char* mode = luaL_checkstring(L, 1);
+    if (strcmp(mode, "gpu") == 0)
+      g.use_gpu = true;
+    else if (strcmp(mode, "cpu") == 0)
+      g.use_gpu = false;
+    else
+      LuaAPI::log("lua: glints: mode must be \"gpu\" or \"cpu\"");
+  }
+  lua_pushinteger(L, g.visible);
+  lua_pushstring(L, g.gpu_active() ? "gpu" : "cpu");
+  return 2;
+}
+
+// glint_check() -> max_px_error, mismatches. Runs GPU and CPU on the same particles.
+static int l_glint_check(lua_State* L) {
+  int bad = 0;
+  float err = GameCtxAPI::glints.compare_gpu_cpu(GameCtxAPI::particles.transforms, GameCtxAPI::ctx.camera,
+                                                 GetScreenWidth(), GetScreenHeight(), &bad);
+  lua_pushnumber(L, err);
+  lua_pushinteger(L, bad);
+  return 2;
+}
+
 // particles([count]) -> count. Get or set how many tumbling triangles are drawn (0 hides them).
 static int l_particles(lua_State* L) {
   auto& ps = GameCtxAPI::particles;
@@ -575,6 +665,12 @@ inline const LuaAPI::Binding BINDINGS[] = {
     {"light_intensity", l_light_intensity, "light_intensity([x]) | light_intensity(light, [x]) -> x",
      "get/set master intensity, or one light's: key fill rim ambient"},
     // --- particles ---
+    // --- effects ---
+    {"sun", l_sun, "sun([x, y, z]) -> x, y, z", "get/set the world-space sun the glints reflect"},
+    {"glints", l_glints, "glints([\"gpu\"|\"cpu\"]) -> visible, mode",
+     "glint count from the last frame; optionally switch the compute path"},
+    {"glint_check", l_glint_check, "glint_check() -> max_px_error, mismatches",
+     "run the compute shader and the CPU path on the same frame; -1 if no GPU"},
     {"particles", l_particles, "particles([count]) -> count",
      "how many tumbling triangle particles are drawn (one instanced call); 0 hides them"},
     // --- camera ---
@@ -582,6 +678,13 @@ inline const LuaAPI::Binding BINDINGS[] = {
      "get or set the camera position and look-at target"},
     // --- output ---
     {"screenshot", l_screenshot, "screenshot([path]) -> path", "save a PNG of the next frame (default screenshot.png)"},
+    {"depth_view", l_depth_view, "depth_view([on], [far]) -> on, far",
+     "dev: draw linear scene depth (black near, white at `far` units) instead of the color layers"},
+    {"dof", l_dof, "dof([on], [focus], [strength], [max_radius]) -> on, focus, strength, max_radius",
+     "depth-of-field blur: radius_px = |depth - focus| * strength, clamped to max_radius"},
+    {"dof_focus", l_dof_focus, "dof_focus(index) -> focus", "set the blur focus to an entity's view depth"},
+    {"dof_show_radius", l_dof_show_radius, "dof_show_radius([on]) -> on",
+     "dev: draw the blur radius as gray (black = in focus) instead of the blurred scene"},
     {"console_print", l_console_print, "console_print(msg)", "print a single string to the game console"},
 };
 

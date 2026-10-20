@@ -1,0 +1,50 @@
+#version 430
+// Sun glint test over the triangle particle system (desktop only, GL 4.3 compute).
+// In:  one raylib Matrix per particle (row-major in memory, so transpose() first).
+// Out: per particle, the screen position + camera distance, and strength 1.0 when the
+//      particle's face mirrors the sun toward the camera (normal parallel to the half vector).
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 1) readonly buffer Transforms { mat4 xf[]; };
+
+struct Glint {
+  vec2 screen;
+  float dist;
+  float strength;
+};
+layout(std430, binding = 2) writeonly buffer Results { Glint out_glints[]; };
+
+uniform vec3 sun_pos;
+uniform vec3 cam_pos;
+uniform mat4 view_proj;
+uniform vec2 screen_size;
+uniform float cos_threshold; // cos(max angle between face normal and half vector)
+uniform int count;
+
+void main() {
+  uint i = gl_GlobalInvocationID.x;
+  if (i >= uint(count))
+    return;
+
+  mat4 m = transpose(xf[i]);
+  vec3 pos = m[3].xyz;
+  vec3 n = normalize(m[2].xyz); // local +Z is the triangle's face normal
+
+  vec3 to_sun = normalize(sun_pos - pos);
+  vec3 to_cam = normalize(cam_pos - pos);
+  vec3 h = normalize(to_sun + to_cam);
+  float a = abs(dot(n, h)); // double-sided triangles: either face can mirror
+
+  vec4 clip = view_proj * vec4(pos, 1.0);
+
+  Glint g;
+  g.screen = vec2(-1.0);
+  g.dist = distance(cam_pos, pos);
+  g.strength = 0.0;
+  if (clip.w > 0.0 && a >= cos_threshold) {
+    vec2 ndc = clip.xy / clip.w;
+    g.screen = (ndc * vec2(0.5, -0.5) + 0.5) * screen_size;
+    g.strength = 1.0; // uniform glint: every aligned particle gets the same sprite
+  }
+  out_glints[i] = g;
+}

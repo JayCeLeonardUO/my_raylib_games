@@ -22,6 +22,7 @@ exit
 #include "../../mylibs/normal_map_utils.hpp"
 #include "../../mylibs/render_api.hpp"
 #include "../../mylibs/three_point_light_api.hpp"
+#include "../../mylibs/sun_glints.hpp"
 #include "../../mylibs/triangle_particles.hpp"
 #include <array>
 #include <bit>
@@ -253,6 +254,7 @@ inline void init_ground() {
 
 // ---- tumbling triangle particles, one instanced draw, lit by the same shader ----
 inline TriangleParticles::System particles;
+inline SunGlints::System glints; // compute-shader sun glints over the particles
 
 inline void unload_ground() {
   ground.materials[0].maps[MATERIAL_MAP_NORMAL].texture = Texture2D{0}; // owned below
@@ -269,6 +271,15 @@ inline void unload_ground() {
 inline thing_ref get_hovered() {
   auto& hovered = ctx.frame_buffer.current().hovered;
   return hovered.empty() ? thing_ref::get_nil_ref() : hovered.front();
+}
+
+/**
+ * @brief Depth of a world point along the camera's view axis (what the depth buffer stores),
+ * not the Euclidean distance. Used to put the depth-of-field focus on an entity.
+ */
+inline float view_depth_of(Vector3 p) {
+  Vector3 fwd = Vector3Normalize(Vector3Subtract(ctx.camera.target, ctx.camera.position));
+  return Vector3DotProduct(Vector3Subtract(p, ctx.camera.position), fwd);
 }
 
 /**
@@ -894,6 +905,8 @@ inline void update() {
   ThreePointLight::begin_frame(ctx.camera);
   particles.update(GetFrameTime());
   particles.draw();
+  if (glints.show_sun)
+    glints.draw_sun_marker();
   for (auto& e : ctx.entities) {
 
     if (!e.render.visible || !e.model.valid()) {
@@ -962,6 +975,13 @@ inline void update() {
     DrawText(e.log_text.data(), (int)screen.x, (int)screen.y, 20, RED);
   }
 
+  // sun glints: compute shader (or CPU fallback) finds particles mirroring the sun at the
+  // camera and hands back screen positions; one uniform additive sprite is drawn at each.
+  if (glints.enabled) {
+    glints.compute(particles.transforms, ctx.camera, GetScreenWidth(), GetScreenHeight());
+    glints.draw_2d();
+  }
+
   // hover card: a trait that also reads entity data (log_text), not just a bit
   DECLARE_TRAIT(HOVER_CARD, "shows this entity's log_text in a card at the mouse while hovered");
   if (auto& h = ctx.entities[get_hovered()]) {
@@ -997,6 +1017,34 @@ inline void draw_imgui() {
     ImGui::SameLine();
     if (ImGui::Button(GameConsoleAPI::visible() ? "Hide console" : "Show console (~)"))
       GameConsoleAPI::toggle_visible();
+    if (RenderAPI::depth_available()) {
+      ImGui::Checkbox("Depth view", &RenderAPI::depth_view);
+      if (RenderAPI::depth_view) {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(160);
+        ImGui::SliderFloat("far (white)", &RenderAPI::depth_vis_far, 2.0f, 200.0f, "%.0f");
+      }
+    } else {
+      ImGui::TextDisabled("Depth view: not available (needs desktop depth textures)");
+    }
+    if (RenderAPI::dof_available()) {
+      ImGui::Checkbox("Depth blur", &RenderAPI::dof_enabled);
+      if (RenderAPI::dof_enabled) {
+        ImGui::SameLine();
+        ImGui::Checkbox("show radius", &RenderAPI::dof_show_radius);
+        ImGui::SameLine();
+        if (ImGui::Button("Focus selected")) {
+          if (auto& sel = ctx.entities[ctx.selected])
+            RenderAPI::dof_focus = view_depth_of(sel.position);
+        }
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("focus (units)", &RenderAPI::dof_focus, 0.5f, 100.0f, "%.1f");
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("strength (px/unit)", &RenderAPI::dof_strength, 0.0f, 20.0f, "%.1f");
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("max radius (px)", &RenderAPI::dof_max_radius, 1.0f, 32.0f, "%.0f");
+      }
+    }
     ImGui::Separator();
 
     //
@@ -1078,6 +1126,10 @@ inline void draw_imgui() {
 
     if (ImGui::CollapsingHeader("Particles")) {
       particles.draw_imgui();
+    }
+
+    if (ImGui::CollapsingHeader("Sun Glints", ImGuiTreeNodeFlags_DefaultOpen)) {
+      glints.draw_imgui();
     }
 
     if (ImGui::CollapsingHeader("Three-Point Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1254,6 +1306,7 @@ int main() {
   ThreePointLight::init();
   GameCtxAPI::init_ground();
   GameCtxAPI::particles.init();
+  GameCtxAPI::glints.init();
 
   LuaAPI::set_log([](const std::string& m) { GameConsoleAPI::print(m); });
   LuaAPI::init();
@@ -1299,6 +1352,7 @@ int main() {
   LuaAPI::shutdown();
   GameCtxAPI::clear_entities();
   AnimationRegistry::unload_all();
+  GameCtxAPI::glints.unload();
   GameCtxAPI::particles.unload();
   GameCtxAPI::unload_ground();
   ThreePointLight::shutdown();

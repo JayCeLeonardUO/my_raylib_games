@@ -36,6 +36,10 @@ set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
 if(EMSCRIPTEN)
   # web build: raylib targets WebGL 1 (OpenGL ES 2.0) and Emscripten's GLFW shim
   set(PLATFORM "Web" CACHE STRING "" FORCE)
+else()
+  # desktop: OpenGL 4.3 core so rlgl's compute shader + SSBO functions are real
+  # (under the default 3.3 they log "SSBO not enabled" and return 0). The 330 shaders still work.
+  set(OPENGL_VERSION "4.3" CACHE STRING "" FORCE)
 endif()
 FetchContent_MakeAvailable(raylib)
 

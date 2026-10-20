@@ -25,18 +25,18 @@
  *
  * | Lua / console name | Enum | Declared at | Doc | Use sites |
  * |---|---|---|---|---|
- * | `cross_slash_hitbox` | `TraitId::CROSS_SLASH_HITBOX` | `main.cpp:530` | short-lived hitbox spawned by a cross slash; hits what it touches | `main.cpp:531` HAS<br>`main.cpp:531` HAS<br>`main.cpp:555` HAS<br>`main.cpp:821` ADD |
- * | `hover_card` | `TraitId::HOVER_CARD` | `main.cpp:966` | shows this entity's log_text in a card at the mouse while hovered | `main.cpp:968` HAS |
- * | `is_animation` | `TraitId::IS_ANIMATION` | `main.cpp:937` | visual: draws animation_id as a screen-space frame sequence; no model | `lua_bindings.inc:294` ADD<br>`main.cpp:855` ADD<br>`main.cpp:938` HAS |
- * | `is_billboard` | `TraitId::IS_BILLBOARD` | `main.cpp:924` | visual: drawn as a camera-facing billboard in the UI_World layer | `main.cpp:925` HAS |
- * | `is_grid_aligned` | `TraitId::IS_GRID_ALIGNED` | `main.cpp:499` | position snaps to integer x/z whenever it moves | `main.cpp:500` HAS |
- * | `is_hitbox` | `TraitId::IS_HITBOX` | `main.cpp:909` | debug: draws its world bounding box in red | `main.cpp:822` ADD<br>`main.cpp:910` HAS |
- * | `is_looping` | `TraitId::IS_LOOPING` | `main.cpp:942` | the IS_ANIMATION frame sequence wraps instead of holding the last frame | `lua_bindings.inc:297` ADD<br>`main.cpp:943` HAS |
- * | `is_pushable` | `TraitId::IS_PUSHABLE` | `main.cpp:536` | takes velocity from pushes and from moving entities that hit it | `main.cpp:537` HAS<br>`main.cpp:569` HAS |
- * | `is_text` | `TraitId::IS_TEXT` | `main.cpp:957` | visual: fading screen-space label from log_text (spawn_label) | `main.cpp:309` ADD<br>`main.cpp:958` HAS |
- * | `pickup` | `TraitId::PICKUP` | `main.cpp:548` | collected (removed) when a WSAD entity touches it | `cmds.inc:46` ADD<br>`main.cpp:549` HAS |
- * | `three_point_lit` | `TraitId::THREE_POINT_LIT` | `main.cpp:903` | visual: drawn with the camera-relative key/fill/rim shader | `main.cpp:904` HAS<br>`main.cpp:1087` HAS<br>`main.cpp:1092` ADD<br>`main.cpp:1097` RM |
- * | `wsad` | `TraitId::WSAD` | `main.cpp:547` | player: moves with WASD, can pick things up and cross slash | `cmds.inc:24` ADD<br>`main.cpp:549` HAS<br>`main.cpp:793` HAS |
+ * | `cross_slash_hitbox` | `TraitId::CROSS_SLASH_HITBOX` | `main.cpp:541` | short-lived hitbox spawned by a cross slash; hits what it touches | `main.cpp:542` HAS<br>`main.cpp:542` HAS<br>`main.cpp:566` HAS<br>`main.cpp:832` ADD |
+ * | `hover_card` | `TraitId::HOVER_CARD` | `main.cpp:986` | shows this entity's log_text in a card at the mouse while hovered | `main.cpp:988` HAS |
+ * | `is_animation` | `TraitId::IS_ANIMATION` | `main.cpp:950` | visual: draws animation_id as a screen-space frame sequence; no model | `lua_bindings.inc:294` ADD<br>`main.cpp:866` ADD<br>`main.cpp:951` HAS |
+ * | `is_billboard` | `TraitId::IS_BILLBOARD` | `main.cpp:937` | visual: drawn as a camera-facing billboard in the UI_World layer | `main.cpp:938` HAS |
+ * | `is_grid_aligned` | `TraitId::IS_GRID_ALIGNED` | `main.cpp:510` | position snaps to integer x/z whenever it moves | `main.cpp:511` HAS |
+ * | `is_hitbox` | `TraitId::IS_HITBOX` | `main.cpp:922` | debug: draws its world bounding box in red | `main.cpp:833` ADD<br>`main.cpp:923` HAS |
+ * | `is_looping` | `TraitId::IS_LOOPING` | `main.cpp:955` | the IS_ANIMATION frame sequence wraps instead of holding the last frame | `lua_bindings.inc:297` ADD<br>`main.cpp:956` HAS |
+ * | `is_pushable` | `TraitId::IS_PUSHABLE` | `main.cpp:547` | takes velocity from pushes and from moving entities that hit it | `main.cpp:548` HAS<br>`main.cpp:580` HAS |
+ * | `is_text` | `TraitId::IS_TEXT` | `main.cpp:970` | visual: fading screen-space label from log_text (spawn_label) | `main.cpp:320` ADD<br>`main.cpp:971` HAS |
+ * | `pickup` | `TraitId::PICKUP` | `main.cpp:559` | collected (removed) when a WSAD entity touches it | `cmds.inc:46` ADD<br>`main.cpp:560` HAS |
+ * | `three_point_lit` | `TraitId::THREE_POINT_LIT` | `main.cpp:916` | visual: drawn with the camera-relative key/fill/rim shader | `main.cpp:917` HAS<br>`main.cpp:1139` HAS<br>`main.cpp:1144` ADD<br>`main.cpp:1149` RM |
+ * | `wsad` | `TraitId::WSAD` | `main.cpp:558` | player: moves with WASD, can pick things up and cross slash | `cmds.inc:24` ADD<br>`main.cpp:560` HAS<br>`main.cpp:804` HAS |
  *
  * @section entity_demo_traits_gen_layout Generated layout
  *
@@ -60,18 +60,18 @@
 // Every generated line below ends with the DECLARE_TRAIT tag (file:line) that produced it.
 /// @brief One enumerator per DECLARE_TRAIT, sorted by identifier. `COUNT` is the trait count.
 enum class TraitId : uint8_t {
-  CROSS_SLASH_HITBOX, // DECLARE_TRAIT main.cpp:530
-  HOVER_CARD, // DECLARE_TRAIT main.cpp:966
-  IS_ANIMATION, // DECLARE_TRAIT main.cpp:937
-  IS_BILLBOARD, // DECLARE_TRAIT main.cpp:924
-  IS_GRID_ALIGNED, // DECLARE_TRAIT main.cpp:499
-  IS_HITBOX, // DECLARE_TRAIT main.cpp:909
-  IS_LOOPING, // DECLARE_TRAIT main.cpp:942
-  IS_PUSHABLE, // DECLARE_TRAIT main.cpp:536
-  IS_TEXT, // DECLARE_TRAIT main.cpp:957
-  PICKUP, // DECLARE_TRAIT main.cpp:548
-  THREE_POINT_LIT, // DECLARE_TRAIT main.cpp:903
-  WSAD, // DECLARE_TRAIT main.cpp:547
+  CROSS_SLASH_HITBOX, // DECLARE_TRAIT main.cpp:541
+  HOVER_CARD, // DECLARE_TRAIT main.cpp:986
+  IS_ANIMATION, // DECLARE_TRAIT main.cpp:950
+  IS_BILLBOARD, // DECLARE_TRAIT main.cpp:937
+  IS_GRID_ALIGNED, // DECLARE_TRAIT main.cpp:510
+  IS_HITBOX, // DECLARE_TRAIT main.cpp:922
+  IS_LOOPING, // DECLARE_TRAIT main.cpp:955
+  IS_PUSHABLE, // DECLARE_TRAIT main.cpp:547
+  IS_TEXT, // DECLARE_TRAIT main.cpp:970
+  PICKUP, // DECLARE_TRAIT main.cpp:559
+  THREE_POINT_LIT, // DECLARE_TRAIT main.cpp:916
+  WSAD, // DECLARE_TRAIT main.cpp:558
   COUNT
 };
 /// @brief Number of generated traits.
@@ -81,73 +81,73 @@ constexpr int TRAIT_COUNT = (int)TraitId::COUNT;
 /// it; the doc lines above list the HAS/ADD/RM sites that use it.
 struct TraitBits {
   /// cross_slash_hitbox: short-lived hitbox spawned by a cross slash; hits what it touches
-  ///   used main.cpp:531 HAS, main.cpp:531 HAS, main.cpp:555 HAS, main.cpp:821 ADD
-  uint8_t cross_slash_hitbox : 1 = 0; // DECLARE_TRAIT main.cpp:530
+  ///   used main.cpp:542 HAS, main.cpp:542 HAS, main.cpp:566 HAS, main.cpp:832 ADD
+  uint8_t cross_slash_hitbox : 1 = 0; // DECLARE_TRAIT main.cpp:541
   /// hover_card: shows this entity's log_text in a card at the mouse while hovered
-  ///   used main.cpp:968 HAS
-  uint8_t hover_card : 1 = 0; // DECLARE_TRAIT main.cpp:966
+  ///   used main.cpp:988 HAS
+  uint8_t hover_card : 1 = 0; // DECLARE_TRAIT main.cpp:986
   /// is_animation: visual: draws animation_id as a screen-space frame sequence; no model
-  ///   used lua_bindings.inc:294 ADD, main.cpp:855 ADD, main.cpp:938 HAS
-  uint8_t is_animation : 1 = 0; // DECLARE_TRAIT main.cpp:937
+  ///   used lua_bindings.inc:294 ADD, main.cpp:866 ADD, main.cpp:951 HAS
+  uint8_t is_animation : 1 = 0; // DECLARE_TRAIT main.cpp:950
   /// is_billboard: visual: drawn as a camera-facing billboard in the UI_World layer
-  ///   used main.cpp:925 HAS
-  uint8_t is_billboard : 1 = 0; // DECLARE_TRAIT main.cpp:924
+  ///   used main.cpp:938 HAS
+  uint8_t is_billboard : 1 = 0; // DECLARE_TRAIT main.cpp:937
   /// is_grid_aligned: position snaps to integer x/z whenever it moves
-  ///   used main.cpp:500 HAS
-  uint8_t is_grid_aligned : 1 = 0; // DECLARE_TRAIT main.cpp:499
+  ///   used main.cpp:511 HAS
+  uint8_t is_grid_aligned : 1 = 0; // DECLARE_TRAIT main.cpp:510
   /// is_hitbox: debug: draws its world bounding box in red
-  ///   used main.cpp:822 ADD, main.cpp:910 HAS
-  uint8_t is_hitbox : 1 = 0; // DECLARE_TRAIT main.cpp:909
+  ///   used main.cpp:833 ADD, main.cpp:923 HAS
+  uint8_t is_hitbox : 1 = 0; // DECLARE_TRAIT main.cpp:922
   /// is_looping: the IS_ANIMATION frame sequence wraps instead of holding the last frame
-  ///   used lua_bindings.inc:297 ADD, main.cpp:943 HAS
-  uint8_t is_looping : 1 = 0; // DECLARE_TRAIT main.cpp:942
+  ///   used lua_bindings.inc:297 ADD, main.cpp:956 HAS
+  uint8_t is_looping : 1 = 0; // DECLARE_TRAIT main.cpp:955
   /// is_pushable: takes velocity from pushes and from moving entities that hit it
-  ///   used main.cpp:537 HAS, main.cpp:569 HAS
-  uint8_t is_pushable : 1 = 0; // DECLARE_TRAIT main.cpp:536
+  ///   used main.cpp:548 HAS, main.cpp:580 HAS
+  uint8_t is_pushable : 1 = 0; // DECLARE_TRAIT main.cpp:547
   /// is_text: visual: fading screen-space label from log_text (spawn_label)
-  ///   used main.cpp:309 ADD, main.cpp:958 HAS
-  uint8_t is_text : 1 = 0; // DECLARE_TRAIT main.cpp:957
+  ///   used main.cpp:320 ADD, main.cpp:971 HAS
+  uint8_t is_text : 1 = 0; // DECLARE_TRAIT main.cpp:970
   /// pickup: collected (removed) when a WSAD entity touches it
-  ///   used cmds.inc:46 ADD, main.cpp:549 HAS
-  uint8_t pickup : 1 = 0; // DECLARE_TRAIT main.cpp:548
+  ///   used cmds.inc:46 ADD, main.cpp:560 HAS
+  uint8_t pickup : 1 = 0; // DECLARE_TRAIT main.cpp:559
   /// three_point_lit: visual: drawn with the camera-relative key/fill/rim shader
-  ///   used main.cpp:904 HAS, main.cpp:1087 HAS, main.cpp:1092 ADD, main.cpp:1097 RM
-  uint8_t three_point_lit : 1 = 0; // DECLARE_TRAIT main.cpp:903
+  ///   used main.cpp:917 HAS, main.cpp:1139 HAS, main.cpp:1144 ADD, main.cpp:1149 RM
+  uint8_t three_point_lit : 1 = 0; // DECLARE_TRAIT main.cpp:916
   /// wsad: player: moves with WASD, can pick things up and cross slash
-  ///   used cmds.inc:24 ADD, main.cpp:549 HAS, main.cpp:793 HAS
-  uint8_t wsad : 1 = 0; // DECLARE_TRAIT main.cpp:547
+  ///   used cmds.inc:24 ADD, main.cpp:560 HAS, main.cpp:804 HAS
+  uint8_t wsad : 1 = 0; // DECLARE_TRAIT main.cpp:558
 
   bool get(TraitId id) const {
     switch (id) {
-    case TraitId::CROSS_SLASH_HITBOX: return cross_slash_hitbox; // DECLARE_TRAIT main.cpp:530
-    case TraitId::HOVER_CARD: return hover_card; // DECLARE_TRAIT main.cpp:966
-    case TraitId::IS_ANIMATION: return is_animation; // DECLARE_TRAIT main.cpp:937
-    case TraitId::IS_BILLBOARD: return is_billboard; // DECLARE_TRAIT main.cpp:924
-    case TraitId::IS_GRID_ALIGNED: return is_grid_aligned; // DECLARE_TRAIT main.cpp:499
-    case TraitId::IS_HITBOX: return is_hitbox; // DECLARE_TRAIT main.cpp:909
-    case TraitId::IS_LOOPING: return is_looping; // DECLARE_TRAIT main.cpp:942
-    case TraitId::IS_PUSHABLE: return is_pushable; // DECLARE_TRAIT main.cpp:536
-    case TraitId::IS_TEXT: return is_text; // DECLARE_TRAIT main.cpp:957
-    case TraitId::PICKUP: return pickup; // DECLARE_TRAIT main.cpp:548
-    case TraitId::THREE_POINT_LIT: return three_point_lit; // DECLARE_TRAIT main.cpp:903
-    case TraitId::WSAD: return wsad; // DECLARE_TRAIT main.cpp:547
+    case TraitId::CROSS_SLASH_HITBOX: return cross_slash_hitbox; // DECLARE_TRAIT main.cpp:541
+    case TraitId::HOVER_CARD: return hover_card; // DECLARE_TRAIT main.cpp:986
+    case TraitId::IS_ANIMATION: return is_animation; // DECLARE_TRAIT main.cpp:950
+    case TraitId::IS_BILLBOARD: return is_billboard; // DECLARE_TRAIT main.cpp:937
+    case TraitId::IS_GRID_ALIGNED: return is_grid_aligned; // DECLARE_TRAIT main.cpp:510
+    case TraitId::IS_HITBOX: return is_hitbox; // DECLARE_TRAIT main.cpp:922
+    case TraitId::IS_LOOPING: return is_looping; // DECLARE_TRAIT main.cpp:955
+    case TraitId::IS_PUSHABLE: return is_pushable; // DECLARE_TRAIT main.cpp:547
+    case TraitId::IS_TEXT: return is_text; // DECLARE_TRAIT main.cpp:970
+    case TraitId::PICKUP: return pickup; // DECLARE_TRAIT main.cpp:559
+    case TraitId::THREE_POINT_LIT: return three_point_lit; // DECLARE_TRAIT main.cpp:916
+    case TraitId::WSAD: return wsad; // DECLARE_TRAIT main.cpp:558
     default: return false;
     }
   }
   void set(TraitId id, bool v) {
     switch (id) {
-    case TraitId::CROSS_SLASH_HITBOX: cross_slash_hitbox = v; break; // DECLARE_TRAIT main.cpp:530
-    case TraitId::HOVER_CARD: hover_card = v; break; // DECLARE_TRAIT main.cpp:966
-    case TraitId::IS_ANIMATION: is_animation = v; break; // DECLARE_TRAIT main.cpp:937
-    case TraitId::IS_BILLBOARD: is_billboard = v; break; // DECLARE_TRAIT main.cpp:924
-    case TraitId::IS_GRID_ALIGNED: is_grid_aligned = v; break; // DECLARE_TRAIT main.cpp:499
-    case TraitId::IS_HITBOX: is_hitbox = v; break; // DECLARE_TRAIT main.cpp:909
-    case TraitId::IS_LOOPING: is_looping = v; break; // DECLARE_TRAIT main.cpp:942
-    case TraitId::IS_PUSHABLE: is_pushable = v; break; // DECLARE_TRAIT main.cpp:536
-    case TraitId::IS_TEXT: is_text = v; break; // DECLARE_TRAIT main.cpp:957
-    case TraitId::PICKUP: pickup = v; break; // DECLARE_TRAIT main.cpp:548
-    case TraitId::THREE_POINT_LIT: three_point_lit = v; break; // DECLARE_TRAIT main.cpp:903
-    case TraitId::WSAD: wsad = v; break; // DECLARE_TRAIT main.cpp:547
+    case TraitId::CROSS_SLASH_HITBOX: cross_slash_hitbox = v; break; // DECLARE_TRAIT main.cpp:541
+    case TraitId::HOVER_CARD: hover_card = v; break; // DECLARE_TRAIT main.cpp:986
+    case TraitId::IS_ANIMATION: is_animation = v; break; // DECLARE_TRAIT main.cpp:950
+    case TraitId::IS_BILLBOARD: is_billboard = v; break; // DECLARE_TRAIT main.cpp:937
+    case TraitId::IS_GRID_ALIGNED: is_grid_aligned = v; break; // DECLARE_TRAIT main.cpp:510
+    case TraitId::IS_HITBOX: is_hitbox = v; break; // DECLARE_TRAIT main.cpp:922
+    case TraitId::IS_LOOPING: is_looping = v; break; // DECLARE_TRAIT main.cpp:955
+    case TraitId::IS_PUSHABLE: is_pushable = v; break; // DECLARE_TRAIT main.cpp:547
+    case TraitId::IS_TEXT: is_text = v; break; // DECLARE_TRAIT main.cpp:970
+    case TraitId::PICKUP: pickup = v; break; // DECLARE_TRAIT main.cpp:559
+    case TraitId::THREE_POINT_LIT: three_point_lit = v; break; // DECLARE_TRAIT main.cpp:916
+    case TraitId::WSAD: wsad = v; break; // DECLARE_TRAIT main.cpp:558
     default: break;
     }
   }
@@ -164,18 +164,18 @@ struct TraitInfo {
 };
 /// @brief One row per trait, indexed by `(int)TraitId`.
 inline constexpr TraitInfo TRAIT_INFO[TRAIT_COUNT] = {
-    {TraitId::CROSS_SLASH_HITBOX, "CROSS_SLASH_HITBOX", "cross_slash_hitbox", "short-lived hitbox spawned by a cross slash; hits what it touches", "main.cpp", 530}, // DECLARE_TRAIT main.cpp:530
-    {TraitId::HOVER_CARD, "HOVER_CARD", "hover_card", "shows this entity's log_text in a card at the mouse while hovered", "main.cpp", 966}, // DECLARE_TRAIT main.cpp:966
-    {TraitId::IS_ANIMATION, "IS_ANIMATION", "is_animation", "visual: draws animation_id as a screen-space frame sequence; no model", "main.cpp", 937}, // DECLARE_TRAIT main.cpp:937
-    {TraitId::IS_BILLBOARD, "IS_BILLBOARD", "is_billboard", "visual: drawn as a camera-facing billboard in the UI_World layer", "main.cpp", 924}, // DECLARE_TRAIT main.cpp:924
-    {TraitId::IS_GRID_ALIGNED, "IS_GRID_ALIGNED", "is_grid_aligned", "position snaps to integer x/z whenever it moves", "main.cpp", 499}, // DECLARE_TRAIT main.cpp:499
-    {TraitId::IS_HITBOX, "IS_HITBOX", "is_hitbox", "debug: draws its world bounding box in red", "main.cpp", 909}, // DECLARE_TRAIT main.cpp:909
-    {TraitId::IS_LOOPING, "IS_LOOPING", "is_looping", "the IS_ANIMATION frame sequence wraps instead of holding the last frame", "main.cpp", 942}, // DECLARE_TRAIT main.cpp:942
-    {TraitId::IS_PUSHABLE, "IS_PUSHABLE", "is_pushable", "takes velocity from pushes and from moving entities that hit it", "main.cpp", 536}, // DECLARE_TRAIT main.cpp:536
-    {TraitId::IS_TEXT, "IS_TEXT", "is_text", "visual: fading screen-space label from log_text (spawn_label)", "main.cpp", 957}, // DECLARE_TRAIT main.cpp:957
-    {TraitId::PICKUP, "PICKUP", "pickup", "collected (removed) when a WSAD entity touches it", "main.cpp", 548}, // DECLARE_TRAIT main.cpp:548
-    {TraitId::THREE_POINT_LIT, "THREE_POINT_LIT", "three_point_lit", "visual: drawn with the camera-relative key/fill/rim shader", "main.cpp", 903}, // DECLARE_TRAIT main.cpp:903
-    {TraitId::WSAD, "WSAD", "wsad", "player: moves with WASD, can pick things up and cross slash", "main.cpp", 547}, // DECLARE_TRAIT main.cpp:547
+    {TraitId::CROSS_SLASH_HITBOX, "CROSS_SLASH_HITBOX", "cross_slash_hitbox", "short-lived hitbox spawned by a cross slash; hits what it touches", "main.cpp", 541}, // DECLARE_TRAIT main.cpp:541
+    {TraitId::HOVER_CARD, "HOVER_CARD", "hover_card", "shows this entity's log_text in a card at the mouse while hovered", "main.cpp", 986}, // DECLARE_TRAIT main.cpp:986
+    {TraitId::IS_ANIMATION, "IS_ANIMATION", "is_animation", "visual: draws animation_id as a screen-space frame sequence; no model", "main.cpp", 950}, // DECLARE_TRAIT main.cpp:950
+    {TraitId::IS_BILLBOARD, "IS_BILLBOARD", "is_billboard", "visual: drawn as a camera-facing billboard in the UI_World layer", "main.cpp", 937}, // DECLARE_TRAIT main.cpp:937
+    {TraitId::IS_GRID_ALIGNED, "IS_GRID_ALIGNED", "is_grid_aligned", "position snaps to integer x/z whenever it moves", "main.cpp", 510}, // DECLARE_TRAIT main.cpp:510
+    {TraitId::IS_HITBOX, "IS_HITBOX", "is_hitbox", "debug: draws its world bounding box in red", "main.cpp", 922}, // DECLARE_TRAIT main.cpp:922
+    {TraitId::IS_LOOPING, "IS_LOOPING", "is_looping", "the IS_ANIMATION frame sequence wraps instead of holding the last frame", "main.cpp", 955}, // DECLARE_TRAIT main.cpp:955
+    {TraitId::IS_PUSHABLE, "IS_PUSHABLE", "is_pushable", "takes velocity from pushes and from moving entities that hit it", "main.cpp", 547}, // DECLARE_TRAIT main.cpp:547
+    {TraitId::IS_TEXT, "IS_TEXT", "is_text", "visual: fading screen-space label from log_text (spawn_label)", "main.cpp", 970}, // DECLARE_TRAIT main.cpp:970
+    {TraitId::PICKUP, "PICKUP", "pickup", "collected (removed) when a WSAD entity touches it", "main.cpp", 559}, // DECLARE_TRAIT main.cpp:559
+    {TraitId::THREE_POINT_LIT, "THREE_POINT_LIT", "three_point_lit", "visual: drawn with the camera-relative key/fill/rim shader", "main.cpp", 916}, // DECLARE_TRAIT main.cpp:916
+    {TraitId::WSAD, "WSAD", "wsad", "player: moves with WASD, can pick things up and cross slash", "main.cpp", 558}, // DECLARE_TRAIT main.cpp:558
 };
 
 /// @brief One HAS_TRAIT / ADD_TRAIT / RM_TRAIT occurrence in the sources.
@@ -187,33 +187,33 @@ struct TraitSite {
 };
 /// @brief Every use site, grouped by trait in TraitId order.
 inline constexpr TraitSite TRAIT_SITES[27] = {
-    {TraitId::CROSS_SLASH_HITBOX, "main.cpp", 531, "HAS"}, // HAS_TRAIT main.cpp:531
-    {TraitId::CROSS_SLASH_HITBOX, "main.cpp", 531, "HAS"}, // HAS_TRAIT main.cpp:531
-    {TraitId::CROSS_SLASH_HITBOX, "main.cpp", 555, "HAS"}, // HAS_TRAIT main.cpp:555
-    {TraitId::CROSS_SLASH_HITBOX, "main.cpp", 821, "ADD"}, // ADD_TRAIT main.cpp:821
-    {TraitId::HOVER_CARD, "main.cpp", 968, "HAS"}, // HAS_TRAIT main.cpp:968
+    {TraitId::CROSS_SLASH_HITBOX, "main.cpp", 542, "HAS"}, // HAS_TRAIT main.cpp:542
+    {TraitId::CROSS_SLASH_HITBOX, "main.cpp", 542, "HAS"}, // HAS_TRAIT main.cpp:542
+    {TraitId::CROSS_SLASH_HITBOX, "main.cpp", 566, "HAS"}, // HAS_TRAIT main.cpp:566
+    {TraitId::CROSS_SLASH_HITBOX, "main.cpp", 832, "ADD"}, // ADD_TRAIT main.cpp:832
+    {TraitId::HOVER_CARD, "main.cpp", 988, "HAS"}, // HAS_TRAIT main.cpp:988
     {TraitId::IS_ANIMATION, "lua_bindings.inc", 294, "ADD"}, // ADD_TRAIT lua_bindings.inc:294
-    {TraitId::IS_ANIMATION, "main.cpp", 855, "ADD"}, // ADD_TRAIT main.cpp:855
-    {TraitId::IS_ANIMATION, "main.cpp", 938, "HAS"}, // HAS_TRAIT main.cpp:938
-    {TraitId::IS_BILLBOARD, "main.cpp", 925, "HAS"}, // HAS_TRAIT main.cpp:925
-    {TraitId::IS_GRID_ALIGNED, "main.cpp", 500, "HAS"}, // HAS_TRAIT main.cpp:500
-    {TraitId::IS_HITBOX, "main.cpp", 822, "ADD"}, // ADD_TRAIT main.cpp:822
-    {TraitId::IS_HITBOX, "main.cpp", 910, "HAS"}, // HAS_TRAIT main.cpp:910
+    {TraitId::IS_ANIMATION, "main.cpp", 866, "ADD"}, // ADD_TRAIT main.cpp:866
+    {TraitId::IS_ANIMATION, "main.cpp", 951, "HAS"}, // HAS_TRAIT main.cpp:951
+    {TraitId::IS_BILLBOARD, "main.cpp", 938, "HAS"}, // HAS_TRAIT main.cpp:938
+    {TraitId::IS_GRID_ALIGNED, "main.cpp", 511, "HAS"}, // HAS_TRAIT main.cpp:511
+    {TraitId::IS_HITBOX, "main.cpp", 833, "ADD"}, // ADD_TRAIT main.cpp:833
+    {TraitId::IS_HITBOX, "main.cpp", 923, "HAS"}, // HAS_TRAIT main.cpp:923
     {TraitId::IS_LOOPING, "lua_bindings.inc", 297, "ADD"}, // ADD_TRAIT lua_bindings.inc:297
-    {TraitId::IS_LOOPING, "main.cpp", 943, "HAS"}, // HAS_TRAIT main.cpp:943
-    {TraitId::IS_PUSHABLE, "main.cpp", 537, "HAS"}, // HAS_TRAIT main.cpp:537
-    {TraitId::IS_PUSHABLE, "main.cpp", 569, "HAS"}, // HAS_TRAIT main.cpp:569
-    {TraitId::IS_TEXT, "main.cpp", 309, "ADD"}, // ADD_TRAIT main.cpp:309
-    {TraitId::IS_TEXT, "main.cpp", 958, "HAS"}, // HAS_TRAIT main.cpp:958
+    {TraitId::IS_LOOPING, "main.cpp", 956, "HAS"}, // HAS_TRAIT main.cpp:956
+    {TraitId::IS_PUSHABLE, "main.cpp", 548, "HAS"}, // HAS_TRAIT main.cpp:548
+    {TraitId::IS_PUSHABLE, "main.cpp", 580, "HAS"}, // HAS_TRAIT main.cpp:580
+    {TraitId::IS_TEXT, "main.cpp", 320, "ADD"}, // ADD_TRAIT main.cpp:320
+    {TraitId::IS_TEXT, "main.cpp", 971, "HAS"}, // HAS_TRAIT main.cpp:971
     {TraitId::PICKUP, "cmds.inc", 46, "ADD"}, // ADD_TRAIT cmds.inc:46
-    {TraitId::PICKUP, "main.cpp", 549, "HAS"}, // HAS_TRAIT main.cpp:549
-    {TraitId::THREE_POINT_LIT, "main.cpp", 904, "HAS"}, // HAS_TRAIT main.cpp:904
-    {TraitId::THREE_POINT_LIT, "main.cpp", 1087, "HAS"}, // HAS_TRAIT main.cpp:1087
-    {TraitId::THREE_POINT_LIT, "main.cpp", 1092, "ADD"}, // ADD_TRAIT main.cpp:1092
-    {TraitId::THREE_POINT_LIT, "main.cpp", 1097, "RM"}, // RM_TRAIT main.cpp:1097
+    {TraitId::PICKUP, "main.cpp", 560, "HAS"}, // HAS_TRAIT main.cpp:560
+    {TraitId::THREE_POINT_LIT, "main.cpp", 917, "HAS"}, // HAS_TRAIT main.cpp:917
+    {TraitId::THREE_POINT_LIT, "main.cpp", 1139, "HAS"}, // HAS_TRAIT main.cpp:1139
+    {TraitId::THREE_POINT_LIT, "main.cpp", 1144, "ADD"}, // ADD_TRAIT main.cpp:1144
+    {TraitId::THREE_POINT_LIT, "main.cpp", 1149, "RM"}, // RM_TRAIT main.cpp:1149
     {TraitId::WSAD, "cmds.inc", 24, "ADD"}, // ADD_TRAIT cmds.inc:24
-    {TraitId::WSAD, "main.cpp", 549, "HAS"}, // HAS_TRAIT main.cpp:549
-    {TraitId::WSAD, "main.cpp", 793, "HAS"}, // HAS_TRAIT main.cpp:793
+    {TraitId::WSAD, "main.cpp", 560, "HAS"}, // HAS_TRAIT main.cpp:560
+    {TraitId::WSAD, "main.cpp", 804, "HAS"}, // HAS_TRAIT main.cpp:804
 };
 /// @brief Number of entries in TRAIT_SITES.
 constexpr int TRAIT_SITE_COUNT = 27;
