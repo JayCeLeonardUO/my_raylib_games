@@ -25,6 +25,7 @@
 #include <rlgl.h>
 #include <string>
 #include <vector>
+#include "shader_portable.hpp"
 
 namespace ThreePointLight {
 
@@ -133,20 +134,15 @@ inline Locs load_locs(const Shader& sh) {
 inline Scheme active = SCHEMES[0];
 inline const Scheme& current() { return active; }
 
-// The web build runs on WebGL 1 (GLSL ES 1.00), so it gets its own shader pair.
-#if defined(__EMSCRIPTEN__)
-inline constexpr const char* DEFAULT_VS = "assets/shaders/three_point_es100.vs";
-inline constexpr const char* DEFAULT_FS = "assets/shaders/three_point_es100.fs";
-inline constexpr const char* DEFAULT_VS_INST = "assets/shaders/three_point_instanced_es100.vs";
-#else
+// GLSL 330 files; the web build (WebGL 2) gets the same files with an ES 3.00 header, see
+// ShaderPortable.
 inline constexpr const char* DEFAULT_VS = "assets/shaders/three_point.vs";
 inline constexpr const char* DEFAULT_FS = "assets/shaders/three_point.fs";
 inline constexpr const char* DEFAULT_VS_INST = "assets/shaders/three_point_instanced.vs";
-#endif
 
 inline bool init(const char* vs_path = DEFAULT_VS, const char* fs_path = DEFAULT_FS,
                  const char* vs_inst_path = DEFAULT_VS_INST) {
-  shader = LoadShader(vs_path, fs_path);
+  shader = ShaderPortable::load(vs_path, fs_path);
   ready = shader.id != 0 && shader.id != rlGetShaderIdDefault();
   if (!ready) {
     TraceLog(LOG_WARNING, "ThreePointLight: shader failed to load (%s, %s)", vs_path, fs_path);
@@ -156,7 +152,7 @@ inline bool init(const char* vs_path = DEFAULT_VS, const char* fs_path = DEFAULT
   shader.locs[SHADER_LOC_VECTOR_VIEW] = locs.viewPos;
 
   // instanced variant: same fragment shader, model matrix from the instanceTransform attribute
-  shader_inst = LoadShader(vs_inst_path, fs_path);
+  shader_inst = ShaderPortable::load(vs_inst_path, fs_path);
   ready_inst = shader_inst.id != 0 && shader_inst.id != rlGetShaderIdDefault();
   if (ready_inst) {
     locs_inst = load_locs(shader_inst);

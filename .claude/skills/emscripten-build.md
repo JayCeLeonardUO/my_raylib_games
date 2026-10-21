@@ -35,12 +35,10 @@ cmake --build build_web -j$(nproc)
 
 ## Shaders
 
-WebGL uses GLSL ES 100 (not GLSL 330). If the demo has custom shaders, they need to support both. Use `#ifdef __EMSCRIPTEN__` in C++ to switch between shader versions at compile time. Key differences:
-- `attribute`/`varying` instead of `in`/`out`
-- `texture2D()` instead of `texture()`
-- `gl_FragColor` instead of custom `out vec4`
-- `precision mediump float;` required
-- No non-constant loop bounds (use fixed max with `break`)
+The web build targets WebGL 2 (raylib `OPENGL_VERSION "ES 3.0"`, set in CMakeLists.txt). GLSL ES 3.00 is GLSL 330 with a different header, so shaders are written once as `#version 330` files and `ShaderPortable::load` / `load_memory` (`src/mylibs/shader_portable.hpp`) swaps the header for `#version 300 es` + default precisions on Emscripten. Do not keep `_es100` copies. Things WebGL 2 still lacks:
+- No compute shaders or SSBOs: keep a CPU fallback behind `rlGetVersion() == RL_OPENGL_43`.
+- Float color attachments (R32F) need the EXT_color_buffer_float extension; Emscripten enables it automatically when the browser has it, and rlgl's `rlFramebufferComplete` tells you if it didn't.
+- `#version` must stay the first line of the source.
 
 ## Prerequisites for a Demo
 

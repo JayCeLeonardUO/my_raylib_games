@@ -3,6 +3,10 @@
 #include <raymath.h>
 #include <rlgl.h>
 #include <vector>
+#include "shader_portable.hpp"
+#if defined(__EMSCRIPTEN__)
+#include <GLES3/gl3.h>
+#endif
 
 // ============================================================================
 // Render Layers
@@ -51,9 +55,9 @@ inline int screen_h = 0;
 inline int layer_count = 0;
 
 // ---- depth view (dev tool) ----
-// On desktop every layer's framebuffer gets a *depth texture* instead of raylib's default depth
-// renderbuffer, so the depth can be sampled later (depth view now, depth-based blur later).
-// The web build (WebGL 1) keeps stock render textures; depth_available() is false there.
+// Every layer's framebuffer gets a *depth texture* instead of raylib's default depth
+// renderbuffer, so the depth can be sampled later (depth view, depth-of-field blur). Works on
+// desktop GL and on the web under WebGL 2; depth_available() is false if the FBOs fell back.
 inline bool depth_view = false;      // rasterize() shows linear depth instead of the color layers
 inline float depth_vis_far = 60.0f;  // world units mapped to white in the depth view
 inline Shader depth_shader = {0};
@@ -62,7 +66,7 @@ inline int depth_loc_near = -1, depth_loc_far = -1, depth_loc_vis = -1;
 // ---- depth-of-field blur ----
 // radius_px = |view_depth - dof_focus| * dof_strength, clamped to dof_max_radius. The color layers
 // are composited into dof_scene, the layer depths MIN-combined into dof_depth (R32F, linear depth /
-// zFar), then one disc-gather blur pass draws the result on the backbuffer. Desktop only.
+// zFar), then one disc-gather blur pass draws the result on the backbuffer.
 inline bool dof_enabled = false;
 inline float dof_focus = 8.0f;        // world units along the view axis
 inline float dof_strength = 3.0f;     // blur px per world unit away from focus
@@ -74,12 +78,10 @@ inline Shader dof_shader = {0};
 inline int dof_loc_depth = -1, dof_loc_texel = -1, dof_loc_far = -1, dof_loc_focus = -1,
            dof_loc_strength = -1, dof_loc_max = -1, dof_loc_show = -1;
 
+inline bool layers_depth_tex = false; // every layer FBO got a sampleable depth texture
+
 inline bool depth_available() {
-#if defined(__EMSCRIPTEN__)
-  return false;
-#else
-  return depth_shader.id != 0 && !layers.empty() && layers[0].texture.depth.id != 0;
-#endif
+  return depth_shader.id != 0 && layers_depth_tex;
 }
 
 inline bool dof_available() {
@@ -146,16 +148,29 @@ void main() {
 }
 )";
 
+#if defined(__EMSCRIPTEN__)
+inline unsigned int load_depth_texture_webgl2(int width, int height) {
+  GLuint id = 0;
+  glGenTextures(1, &id);
+  glBindTexture(GL_TEXTURE_2D, id);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, width, height, 0, GL_DEPTH_COMPONENT,
+               GL_UNSIGNED_INT, nullptr);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glBindTexture(GL_TEXTURE_2D, 0);
+  return id;
+}
+#endif
+
 /// raylib's LoadRenderTexture with a chosen color format and, optionally, a sampleable depth
 /// *texture* instead of the stock depth renderbuffer (pattern from the shaders_write_depth
 /// example). Falls back to LoadRenderTexture if the FBO fails.
 inline RenderTexture2D load_render_texture_ex(int width, int height, int color_format,
-                                              bool with_depth_tex) {
-#if defined(__EMSCRIPTEN__)
-  (void)color_format;
-  (void)with_depth_tex;
-  return LoadRenderTexture(width, height);
-#else
+                                              bool with_depth_tex, bool* custom_ok = nullptr) {
+  if (custom_ok)
+    *custom_ok = false;
   RenderTexture2D target = {0};
   target.id = rlLoadFramebuffer();
   if (target.id == 0)
@@ -168,7 +183,13 @@ inline RenderTexture2D load_render_texture_ex(int width, int height, int color_f
   target.texture.mipmaps = 1;
   rlFramebufferAttach(target.id, target.texture.id, RL_ATTACHMENT_COLOR_CHANNEL0, RL_ATTACHMENT_TEXTURE2D, 0);
   if (with_depth_tex) {
+#if defined(__EMSCRIPTEN__)
+    // WebGL 2 rejects the unsized GL_DEPTH_COMPONENT that rlLoadTextureDepth uses for WebGL
+    // ("texImage2D: invalid internalformat"); it needs the sized DEPTH_COMPONENT24.
+    target.depth.id = load_depth_texture_webgl2(width, height);
+#else
     target.depth.id = rlLoadTextureDepth(width, height, false);
+#endif
     target.depth.width = width;
     target.depth.height = height;
     target.depth.format = 19; // DEPTH_COMPONENT_24BIT
@@ -186,13 +207,14 @@ inline RenderTexture2D load_render_texture_ex(int width, int height, int color_f
     rlUnloadFramebuffer(target.id);
     return LoadRenderTexture(width, height);
   }
+  if (custom_ok)
+    *custom_ok = true;
   return target;
-#endif
 }
 
 /// Every render layer uses this: RGBA8 color plus a depth texture the depth view / DoF can sample.
-inline RenderTexture2D load_render_texture_depth_tex(int width, int height) {
-  return load_render_texture_ex(width, height, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, true);
+inline RenderTexture2D load_render_texture_depth_tex(int width, int height, bool* ok = nullptr) {
+  return load_render_texture_ex(width, height, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, true, ok);
 }
 
 inline void unload_render_texture_depth_tex(RenderTexture2D target) {
@@ -214,12 +236,14 @@ inline void init(int count = static_cast<int>(RenderLayer::COUNT)) {
   screen_h = GetScreenHeight();
   layer_count = count;
   layers.resize(count);
+  layers_depth_tex = count > 0;
   for (int i = 0; i < count; i++) {
-    layers[i].texture = load_render_texture_depth_tex(screen_w, screen_h);
+    bool ok = false;
+    layers[i].texture = load_render_texture_depth_tex(screen_w, screen_h, &ok);
     layers[i].used = false;
+    layers_depth_tex = layers_depth_tex && ok;
   }
-#if !defined(__EMSCRIPTEN__)
-  depth_shader = LoadShaderFromMemory(nullptr, DEPTH_VIS_FS);
+  depth_shader = ShaderPortable::load_memory(nullptr, DEPTH_VIS_FS);
   if (depth_shader.id != rlGetShaderIdDefault()) {
     depth_loc_near = GetShaderLocation(depth_shader, "zNear");
     depth_loc_far = GetShaderLocation(depth_shader, "zFar");
@@ -228,9 +252,16 @@ inline void init(int count = static_cast<int>(RenderLayer::COUNT)) {
     depth_shader = {0};
     TraceLog(LOG_WARNING, "RENDERAPI: depth view shader failed to compile");
   }
-  dof_scene = load_render_texture_ex(screen_w, screen_h, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, true);
-  dof_depth = load_render_texture_ex(screen_w, screen_h, PIXELFORMAT_UNCOMPRESSED_R32, false);
-  dof_shader = LoadShaderFromMemory(nullptr, DOF_FS);
+  bool scene_ok = false, depth_ok = false;
+  dof_scene = load_render_texture_ex(screen_w, screen_h, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, true, &scene_ok);
+  dof_depth = load_render_texture_ex(screen_w, screen_h, PIXELFORMAT_UNCOMPRESSED_R32, false, &depth_ok);
+  if (!scene_ok || !depth_ok) { // a stock RGBA8 fallback would quantize the depth; disable instead
+    UnloadRenderTexture(dof_scene);
+    UnloadRenderTexture(dof_depth);
+    dof_scene = {0};
+    dof_depth = {0};
+  }
+  dof_shader = ShaderPortable::load_memory(nullptr, DOF_FS);
   if (dof_shader.id != rlGetShaderIdDefault()) {
     dof_loc_depth = GetShaderLocation(dof_shader, "depthTex");
     dof_loc_texel = GetShaderLocation(dof_shader, "texel");
@@ -243,7 +274,8 @@ inline void init(int count = static_cast<int>(RenderLayer::COUNT)) {
     dof_shader = {0};
     TraceLog(LOG_WARNING, "RENDERAPI: depth-of-field shader failed to compile");
   }
-#endif
+  TraceLog(LOG_INFO, "RENDERAPI: depth view %s, depth-of-field %s", depth_available() ? "available" : "unavailable",
+           dof_available() ? "available" : "unavailable");
 }
 
 inline void shutdown() {
@@ -253,6 +285,7 @@ inline void shutdown() {
   }
   layers.clear();
   layer_count = 0;
+  layers_depth_tex = false;
   if (depth_shader.id)
     UnloadShader(depth_shader);
   depth_shader = {0};

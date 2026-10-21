@@ -34,8 +34,12 @@ FetchContent_Declare(
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
 if(EMSCRIPTEN)
-  # web build: raylib targets WebGL 1 (OpenGL ES 2.0) and Emscripten's GLFW shim
+  # web build: raylib on Emscripten's GLFW shim, targeting WebGL 2 (OpenGL ES 3.0) so depth
+  # textures and float render targets exist (depth view, depth-of-field). raylib adds the
+  # -sMIN/MAX_WEBGL_VERSION=2 link flags itself. Shaders stay GLSL 330 files; ShaderPortable
+  # rewrites the header to ES 3.00 at load time.
   set(PLATFORM "Web" CACHE STRING "" FORCE)
+  set(OPENGL_VERSION "ES 3.0" CACHE STRING "" FORCE)
 else()
   # desktop: OpenGL 4.3 core so rlgl's compute shader + SSBO functions are real
   # (under the default 3.3 they log "SSBO not enabled" and return 0). The 330 shaders still work.
@@ -224,9 +228,9 @@ game_gen_traits(entity_demo)
 target_link_libraries(entity_demo PRIVATE Boost::pfr lua_lib)
 game_embed_files(entity_demo
   assets/setup.lua
-  assets/shaders/three_point_es100.vs
-  assets/shaders/three_point_es100.fs
-  assets/shaders/three_point_instanced_es100.vs
+  assets/shaders/three_point.vs
+  assets/shaders/three_point.fs
+  assets/shaders/three_point_instanced.vs
 )
 
 # ImGui prototype

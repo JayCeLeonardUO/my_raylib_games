@@ -6,7 +6,7 @@
 // with strength 1.0 when the triangle's face mirrors the sun toward the camera. The game then
 // draws one uniform additive sprite at every returned screen position.
 //
-// The same math runs on the CPU when compute is unavailable (web build is WebGL 1, or raylib
+// The same math runs on the CPU when compute is unavailable (web build is WebGL 2, which has no compute, or raylib
 // was built without GRAPHICS_API_OPENGL_43). compare_gpu_cpu() checks the two paths agree.
 
 #include "raylib.h"

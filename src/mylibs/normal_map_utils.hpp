@@ -11,7 +11,7 @@
 namespace NormalMapUtils {
 
 /// Soft two-octave Perlin "stone/plaster" surface as a tangent-space normal map.
-/// size must be a power of two (mipmaps + WebGL 1). strength ~1.0 is subtle, 3.0 is bumpy.
+/// size must be a power of two (mipmaps). strength ~1.0 is subtle, 3.0 is bumpy.
 inline Texture2D make_noise_normal_map(int size = 1024, float strength = 1.0f, int seed = 7) {
   Image broad = GenImagePerlinNoise(size, size, seed * 13, seed * 7, 5.0f);
   Image fine = GenImagePerlinNoise(size, size, seed * 31, seed * 3, 22.0f);
