@@ -78,6 +78,21 @@ inline Shader dof_shader = {0};
 inline int dof_loc_depth = -1, dof_loc_texel = -1, dof_loc_far = -1, dof_loc_focus = -1,
            dof_loc_strength = -1, dof_loc_max = -1, dof_loc_show = -1;
 
+// ---- atmospheric fog ----
+// One full-screen pass after the color composite: reads the nearest linear depth (dof_depth) and
+// draws fog_color with alpha = 1 - exp(-(depth - fog_start) * fog_density), capped at fog_max.
+// The default alpha blend mixes it over the frame already on the backbuffer, so nothing is
+// overwritten. Needs the same depth texture as the DoF pass, so it gates on dof_available().
+inline bool fog_enabled = false;
+inline Color fog_color = {170, 190, 215, 255};
+inline float fog_start = 8.0f;     // world units: untouched closer than this
+inline float fog_density = 0.05f;  // falloff per unit beyond fog_start
+inline float fog_max = 0.9f;       // alpha cap so far things never vanish completely
+inline bool fog_sky = true;        // tint pixels where nothing was drawn (depth = zFar) too
+inline Shader fog_shader = {0};
+inline int fog_loc_far = -1, fog_loc_color = -1, fog_loc_start = -1, fog_loc_density = -1,
+           fog_loc_max = -1, fog_loc_sky = -1;
+
 inline bool layers_depth_tex = false; // every layer FBO got a sampleable depth texture
 
 inline bool depth_available() {
@@ -86,6 +101,10 @@ inline bool depth_available() {
 
 inline bool dof_available() {
   return depth_available() && dof_shader.id != 0 && dof_scene.id != 0 && dof_depth.id != 0;
+}
+
+inline bool fog_available() {
+  return dof_available() && fog_shader.id != 0;
 }
 
 // GLSL 330: sample the depth texture, linearize with the projection's near/far, map to gray.
@@ -99,6 +118,7 @@ uniform float zFar;
 uniform float visFar;
 void main() {
   float d = texture(texture0, fragTexCoord).r;
+  if (d >= 1.0) { finalColor = vec4(1.0); return; } // cleared (nothing drawn): exactly far
   float ndc = d * 2.0 - 1.0;
   float lin = (2.0 * zNear * zFar) / (zFar + zNear - ndc * (zFar - zNear));
   float g = visFar > 0.0 ? clamp(lin / visFar, 0.0, 1.0) : lin / zFar;
@@ -163,6 +183,27 @@ inline unsigned int load_depth_texture_webgl2(int width, int height) {
   return id;
 }
 #endif
+
+// GLSL 330 fog: texture0 = dof_depth (linear depth / zFar). Straight color with alpha = fog
+// amount; drawn with the normal blend mode so the hardware does fog*a + scene*(1-a).
+inline const char* FOG_FS = R"(#version 330
+in vec2 fragTexCoord;
+out vec4 finalColor;
+uniform sampler2D texture0;
+uniform float zFar;
+uniform vec3 fogColor;
+uniform float fogStart;
+uniform float fogDensity;
+uniform float fogMax;
+uniform int fogSky;
+void main() {
+  float raw = texture(texture0, fragTexCoord).r;
+  if (fogSky == 0 && raw > 0.9999) discard;
+  float d = raw * zFar;
+  float f = 1.0 - exp(-max(d - fogStart, 0.0) * fogDensity);
+  finalColor = vec4(fogColor, min(f, fogMax));
+}
+)";
 
 /// raylib's LoadRenderTexture with a chosen color format and, optionally, a sampleable depth
 /// *texture* instead of the stock depth renderbuffer (pattern from the shaders_write_depth
@@ -274,8 +315,21 @@ inline void init(int count = static_cast<int>(RenderLayer::COUNT)) {
     dof_shader = {0};
     TraceLog(LOG_WARNING, "RENDERAPI: depth-of-field shader failed to compile");
   }
-  TraceLog(LOG_INFO, "RENDERAPI: depth view %s, depth-of-field %s", depth_available() ? "available" : "unavailable",
-           dof_available() ? "available" : "unavailable");
+  fog_shader = ShaderPortable::load_memory(nullptr, FOG_FS);
+  if (fog_shader.id != rlGetShaderIdDefault()) {
+    fog_loc_far = GetShaderLocation(fog_shader, "zFar");
+    fog_loc_color = GetShaderLocation(fog_shader, "fogColor");
+    fog_loc_start = GetShaderLocation(fog_shader, "fogStart");
+    fog_loc_density = GetShaderLocation(fog_shader, "fogDensity");
+    fog_loc_max = GetShaderLocation(fog_shader, "fogMax");
+    fog_loc_sky = GetShaderLocation(fog_shader, "fogSky");
+  } else {
+    fog_shader = {0};
+    TraceLog(LOG_WARNING, "RENDERAPI: fog shader failed to compile");
+  }
+  TraceLog(LOG_INFO, "RENDERAPI: depth view %s, depth-of-field %s, fog %s",
+           depth_available() ? "available" : "unavailable", dof_available() ? "available" : "unavailable",
+           fog_available() ? "available" : "unavailable");
 }
 
 inline void shutdown() {
@@ -292,6 +346,9 @@ inline void shutdown() {
   if (dof_shader.id)
     UnloadShader(dof_shader);
   dof_shader = {0};
+  if (fog_shader.id)
+    UnloadShader(fog_shader);
+  fog_shader = {0};
   if (dof_scene.id)
     UnloadRenderTexture(dof_scene);
   dof_scene = {0};
@@ -393,17 +450,23 @@ inline void draw_color_layers() {
   }
 }
 
-/// Depth-of-field: composite color -> dof_scene, min depth -> dof_depth, blur onto the backbuffer.
+/// Nearest depth across the used layers -> dof_depth (r = linear depth / zFar, 1.0 = nothing drawn).
+inline void build_depth_min() {
+  BeginTextureMode(dof_depth);
+  ClearBackground(WHITE);
+  draw_depth_min(0.0f);
+  EndTextureMode();
+}
+
+/// Depth-of-field: composite color -> dof_scene, min depth -> dof_depth, blur onto the current
+/// target. Leaves `used` set and dof_depth valid so fog can follow.
 inline void rasterize_dof() {
   BeginTextureMode(dof_scene);
   ClearBackground(BLANK);
   draw_color_layers();
   EndTextureMode();
 
-  BeginTextureMode(dof_depth);
-  ClearBackground(WHITE); // r = 1.0 = zFar where nothing was drawn
-  draw_depth_min(0.0f);
-  EndTextureMode();
+  build_depth_min();
 
   float z_far = (float)RL_CULL_DISTANCE_FAR;
   Vector2 texel = {1.0f / (float)screen_w, 1.0f / (float)screen_h};
@@ -421,7 +484,25 @@ inline void rasterize_dof() {
                  {0, 0, (float)dof_scene.texture.width, (float)-dof_scene.texture.height}, {0, 0},
                  WHITE);
   EndShaderMode();
-  clear_used();
+}
+
+/// Fog: tint the frame already on the current target by depth. Expects dof_depth to be filled.
+inline void draw_fog() {
+  float z_far = (float)RL_CULL_DISTANCE_FAR;
+  Vector3 c = {fog_color.r / 255.0f, fog_color.g / 255.0f, fog_color.b / 255.0f};
+  int sky = fog_sky ? 1 : 0;
+  BeginShaderMode(fog_shader);
+  SetShaderValue(fog_shader, fog_loc_far, &z_far, SHADER_UNIFORM_FLOAT);
+  SetShaderValue(fog_shader, fog_loc_color, &c, SHADER_UNIFORM_VEC3);
+  SetShaderValue(fog_shader, fog_loc_start, &fog_start, SHADER_UNIFORM_FLOAT);
+  SetShaderValue(fog_shader, fog_loc_density, &fog_density, SHADER_UNIFORM_FLOAT);
+  SetShaderValue(fog_shader, fog_loc_max, &fog_max, SHADER_UNIFORM_FLOAT);
+  SetShaderValue(fog_shader, fog_loc_sky, &sky, SHADER_UNIFORM_INT);
+  // the depth texture is texture0; the quad covers the screen; default alpha blend does the mix
+  DrawTextureRec(dof_depth.texture,
+                 {0, 0, (float)dof_depth.texture.width, (float)-dof_depth.texture.height}, {0, 0},
+                 WHITE);
+  EndShaderMode();
 }
 
 inline void rasterize() {
@@ -430,11 +511,16 @@ inline void rasterize() {
     rasterize_depth();
     return;
   }
+  bool fog = fog_enabled && fog_available();
   if (dof_enabled && dof_available()) {
-    rasterize_dof();
-    return;
+    rasterize_dof(); // fills dof_depth on the way
+  } else {
+    draw_color_layers();
+    if (fog)
+      build_depth_min();
   }
-  draw_color_layers();
+  if (fog)
+    draw_fog();
   clear_used();
 }
 

@@ -567,6 +567,42 @@ static int l_dof_show_radius(lua_State* L) {
   return 1;
 }
 
+// fog([on], [start], [density], [max]) -> on, start, density, max. Depth-based tint pass.
+static int l_fog(lua_State* L) {
+  if (lua_gettop(L) >= 1)
+    RenderAPI::fog_enabled = lua_toboolean(L, 1) && RenderAPI::fog_available();
+  if (lua_gettop(L) >= 2)
+    RenderAPI::fog_start = (float)luaL_checknumber(L, 2);
+  if (lua_gettop(L) >= 3)
+    RenderAPI::fog_density = (float)luaL_checknumber(L, 3);
+  if (lua_gettop(L) >= 4)
+    RenderAPI::fog_max = (float)luaL_checknumber(L, 4);
+  lua_pushboolean(L, RenderAPI::fog_enabled);
+  lua_pushnumber(L, RenderAPI::fog_start);
+  lua_pushnumber(L, RenderAPI::fog_density);
+  lua_pushnumber(L, RenderAPI::fog_max);
+  return 4;
+}
+
+// fog_color([r, g, b]) -> r, g, b (0-255). Get or set the fog tint.
+static int l_fog_color(lua_State* L) {
+  if (lua_gettop(L) >= 3)
+    RenderAPI::fog_color = {(unsigned char)luaL_checkinteger(L, 1), (unsigned char)luaL_checkinteger(L, 2),
+                            (unsigned char)luaL_checkinteger(L, 3), 255};
+  lua_pushinteger(L, RenderAPI::fog_color.r);
+  lua_pushinteger(L, RenderAPI::fog_color.g);
+  lua_pushinteger(L, RenderAPI::fog_color.b);
+  return 3;
+}
+
+// fog_sky([on]) -> on. Whether the empty background is tinted too.
+static int l_fog_sky(lua_State* L) {
+  if (lua_gettop(L) >= 1)
+    RenderAPI::fog_sky = lua_toboolean(L, 1);
+  lua_pushboolean(L, RenderAPI::fog_sky);
+  return 1;
+}
+
 // sun([x, y, z]) -> x, y, z. Get or set the glint sun position (world space).
 static int l_sun(lua_State* L) {
   auto& g = GameCtxAPI::glints;
@@ -685,6 +721,10 @@ inline const LuaAPI::Binding BINDINGS[] = {
     {"dof_focus", l_dof_focus, "dof_focus(index) -> focus", "set the blur focus to an entity's view depth"},
     {"dof_show_radius", l_dof_show_radius, "dof_show_radius([on]) -> on",
      "dev: draw the blur radius as gray (black = in focus) instead of the blurred scene"},
+    {"fog", l_fog, "fog([on], [start], [density], [max]) -> on, start, density, max",
+     "atmospheric fog: alpha = 1 - exp(-(depth - start) * density), capped at max, tinted over the frame"},
+    {"fog_color", l_fog_color, "fog_color([r, g, b]) -> r, g, b", "get/set the fog tint (0-255)"},
+    {"fog_sky", l_fog_sky, "fog_sky([on]) -> on", "also tint pixels where nothing was drawn"},
     {"console_print", l_console_print, "console_print(msg)", "print a single string to the game console"},
 };
 

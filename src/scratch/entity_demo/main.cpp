@@ -1045,6 +1045,25 @@ inline void draw_imgui() {
         ImGui::SliderFloat("max radius (px)", &RenderAPI::dof_max_radius, 1.0f, 32.0f, "%.0f");
       }
     }
+    if (RenderAPI::fog_available()) {
+      ImGui::Checkbox("Fog", &RenderAPI::fog_enabled);
+      if (RenderAPI::fog_enabled) {
+        ImGui::SameLine();
+        ImGui::Checkbox("tint sky", &RenderAPI::fog_sky);
+        float fc[3] = {RenderAPI::fog_color.r / 255.0f, RenderAPI::fog_color.g / 255.0f,
+                       RenderAPI::fog_color.b / 255.0f};
+        ImGui::SetNextItemWidth(200);
+        if (ImGui::ColorEdit3("fog color", fc))
+          RenderAPI::fog_color = {(unsigned char)(fc[0] * 255.0f), (unsigned char)(fc[1] * 255.0f),
+                                  (unsigned char)(fc[2] * 255.0f), 255};
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("fog start (units)", &RenderAPI::fog_start, 0.0f, 100.0f, "%.1f");
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("fog density", &RenderAPI::fog_density, 0.0f, 0.5f, "%.3f");
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("fog max", &RenderAPI::fog_max, 0.0f, 1.0f, "%.2f");
+      }
+    }
     ImGui::Separator();
 
     //

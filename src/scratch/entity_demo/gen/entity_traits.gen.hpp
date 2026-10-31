@@ -35,7 +35,7 @@
  * | `is_pushable` | `TraitId::IS_PUSHABLE` | `main.cpp:547` | takes velocity from pushes and from moving entities that hit it | `main.cpp:548` HAS<br>`main.cpp:580` HAS |
  * | `is_text` | `TraitId::IS_TEXT` | `main.cpp:970` | visual: fading screen-space label from log_text (spawn_label) | `main.cpp:320` ADD<br>`main.cpp:971` HAS |
  * | `pickup` | `TraitId::PICKUP` | `main.cpp:559` | collected (removed) when a WSAD entity touches it | `cmds.inc:46` ADD<br>`main.cpp:560` HAS |
- * | `three_point_lit` | `TraitId::THREE_POINT_LIT` | `main.cpp:916` | visual: drawn with the camera-relative key/fill/rim shader | `main.cpp:917` HAS<br>`main.cpp:1139` HAS<br>`main.cpp:1144` ADD<br>`main.cpp:1149` RM |
+ * | `three_point_lit` | `TraitId::THREE_POINT_LIT` | `main.cpp:916` | visual: drawn with the camera-relative key/fill/rim shader | `main.cpp:917` HAS<br>`main.cpp:1158` HAS<br>`main.cpp:1163` ADD<br>`main.cpp:1168` RM |
  * | `wsad` | `TraitId::WSAD` | `main.cpp:558` | player: moves with WASD, can pick things up and cross slash | `cmds.inc:24` ADD<br>`main.cpp:560` HAS<br>`main.cpp:804` HAS |
  *
  * @section entity_demo_traits_gen_layout Generated layout
@@ -111,7 +111,7 @@ struct TraitBits {
   ///   used cmds.inc:46 ADD, main.cpp:560 HAS
   uint8_t pickup : 1 = 0; // DECLARE_TRAIT main.cpp:559
   /// three_point_lit: visual: drawn with the camera-relative key/fill/rim shader
-  ///   used main.cpp:917 HAS, main.cpp:1139 HAS, main.cpp:1144 ADD, main.cpp:1149 RM
+  ///   used main.cpp:917 HAS, main.cpp:1158 HAS, main.cpp:1163 ADD, main.cpp:1168 RM
   uint8_t three_point_lit : 1 = 0; // DECLARE_TRAIT main.cpp:916
   /// wsad: player: moves with WASD, can pick things up and cross slash
   ///   used cmds.inc:24 ADD, main.cpp:560 HAS, main.cpp:804 HAS
@@ -208,9 +208,9 @@ inline constexpr TraitSite TRAIT_SITES[27] = {
     {TraitId::PICKUP, "cmds.inc", 46, "ADD"}, // ADD_TRAIT cmds.inc:46
     {TraitId::PICKUP, "main.cpp", 560, "HAS"}, // HAS_TRAIT main.cpp:560
     {TraitId::THREE_POINT_LIT, "main.cpp", 917, "HAS"}, // HAS_TRAIT main.cpp:917
-    {TraitId::THREE_POINT_LIT, "main.cpp", 1139, "HAS"}, // HAS_TRAIT main.cpp:1139
-    {TraitId::THREE_POINT_LIT, "main.cpp", 1144, "ADD"}, // ADD_TRAIT main.cpp:1144
-    {TraitId::THREE_POINT_LIT, "main.cpp", 1149, "RM"}, // RM_TRAIT main.cpp:1149
+    {TraitId::THREE_POINT_LIT, "main.cpp", 1158, "HAS"}, // HAS_TRAIT main.cpp:1158
+    {TraitId::THREE_POINT_LIT, "main.cpp", 1163, "ADD"}, // ADD_TRAIT main.cpp:1163
+    {TraitId::THREE_POINT_LIT, "main.cpp", 1168, "RM"}, // RM_TRAIT main.cpp:1168
     {TraitId::WSAD, "cmds.inc", 24, "ADD"}, // ADD_TRAIT cmds.inc:24
     {TraitId::WSAD, "main.cpp", 560, "HAS"}, // HAS_TRAIT main.cpp:560
     {TraitId::WSAD, "main.cpp", 804, "HAS"}, // HAS_TRAIT main.cpp:804
