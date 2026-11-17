@@ -15,15 +15,16 @@ exit
 // ============================================================================
 #include "../../mylibs/animation_registry.hpp"
 #include "../../mylibs/game_console_api.hpp"
-#include "../../mylibs/ilist.hpp" // I think I named this ilist for intrusive list
+#include "../../mylibs/ilist.hpp"     // I think I named this ilist for intrusive list
 #include "../../mylibs/lua_api.hpp"   // VM core, game-agnostic
 #include "../../mylibs/lua_imgui.hpp" // Lua history window
 #include "../../mylibs/model_api.hpp"
 #include "../../mylibs/normal_map_utils.hpp"
 #include "../../mylibs/render_api.hpp"
-#include "../../mylibs/three_point_light_api.hpp"
 #include "../../mylibs/sun_glints.hpp"
+#include "../../mylibs/three_point_light_api.hpp"
 #include "../../mylibs/triangle_particles.hpp"
+#include "shaders.c" // GLSL strings for the point-light shadow capture
 #include <array>
 #include <bit>
 #include <cmath>
@@ -115,6 +116,7 @@ struct Entity : thing_base {
   } flags = {};
 
   RenderTraits render;
+  Color bloom_color = WHITE; // what a BLOOM entity emits: its texture times this (see bloom())
   float life_time = make_unset<float>();
 
   thing_ref spawner = make_unset<thing_ref>();
@@ -170,7 +172,8 @@ template <> struct hash<Pair> {
 // GameCtxAPI
 // ============================================================================
 
-namespace GameCtxAPI {
+namespace GameCtxAPI { // TODO: this namespace is annoying. now that I look at it with fresh eyes.
+// I could not find the update via the outline. it was hidden
 
 struct FrameCtx {
   Vector2 mouse = {};
@@ -538,7 +541,8 @@ inline void handle_pair(Entity& a, Entity& b) {
     return;
   }
 
-  DECLARE_TRAIT(CROSS_SLASH_HITBOX, "short-lived hitbox spawned by a cross slash; hits what it touches");
+  DECLARE_TRAIT(CROSS_SLASH_HITBOX,
+                "short-lived hitbox spawned by a cross slash; hits what it touches");
   if (HAS_TRAIT(a, CROSS_SLASH_HITBOX) && HAS_TRAIT(b, CROSS_SLASH_HITBOX)) {
     return;
   }
@@ -647,6 +651,62 @@ inline std::string debug_entity_groups(Entity& e) {
  *        processes cross-slash on mouse release, and renders all entities.
  */
 
+// point-light shadow capture (filled in the render section of update(), shown by draw_imgui())
+inline constexpr int SHADOW_SIZE = 1024;       // cube face size in px
+inline constexpr int SHADOW_PREVIEW_TILE = 128; // preview sheet is 3x2 tiles
+inline RenderTexture2D shadow_preview = {0};   // RGBA8 sheet of the six cube faces: +X -X +Y / -Y +Z -Z
+inline bool shadow_drawn = false;              // the shadow pass ran this frame
+inline bool shadow_ok = false;                 // the cube + FBO were created
+inline float shadow_preview_range = 10.0f;     // world units mapped to white in the preview
+inline bool point_light_debug = false;         // debug: everything the point light reaches is drawn solid red
+inline float point_light_debug_bias = 0.015f;  // world units of slack in the shadow-cube compare
+inline float point_light_radius = 8.0f;        // effective radius: nothing farther from the light is tinted
+inline float point_light_tint = 1.0f;          // tint intensity: 0 = regular color, 1 = solid red
+inline bool point_light_deferred = false;      // debug tint as one screen-space pass from the camera depth
+inline bool point_light_marker = true;         // show the light's small sphere; while shown it can be dragged
+inline bool point_light_shading = true;        // deferred shading: the point light is added onto the frame
+inline Color point_light_color = {255, 236, 200, 255};
+inline float point_light_intensity = 1.5f;
+inline float point_light_spec_strength = 0.25f;
+inline float point_light_spec_power = 32.0f;
+inline Texture2D gbuffer_normal_tex = {0};     // G-buffer targets, for the ImGui thumbnails
+inline Texture2D gbuffer_albedo_tex = {0};
+inline bool gbuffer_drawn = false;             // the G-buffer was filled this frame
+
+inline constexpr int MAX_POINT_LIGHTS = 6;     // one shadow cube each; the fog shader has six cube samplers
+inline int shadow_light_count = 0;             // lights whose cube was filled this frame
+inline int point_light_focus = 0;              // which light the cube preview and the debug tint show
+
+// volumetric fog: ray-marched fBm noise lit by the point lights through their shadow cubes
+inline bool vfog_enabled = true;
+inline bool vfog_drawn = false;                // the fog pass ran this frame
+inline int vfog_steps = 65;                    // march steps per pixel
+inline int vfog_downscale = 2;                 // fog is marched at 1/N of the screen size, then scaled up
+inline float vfog_density = 0.15f;             // extinction per world unit at full noise
+inline float vfog_max_dist = 30.0f;            // march no farther than this (view depth, units)
+inline float vfog_noise_scale = 0.45f;         // fBm frequency
+inline float vfog_noise_amount = 0.60f;        // 0 = even fog, 1 = full clumps
+inline float vfog_wind = 0.25f;                // drift speed of the noise
+inline float vfog_top = 2.5f;                  // world y where the fog ends
+inline float vfog_fade = 2.0f;                 // units over which it thins out below the top
+inline Color vfog_ambient = {110, 120, 140, 255};
+inline float vfog_ambient_intensity = 0.15f;
+inline float vfog_scatter = 3.0f;              // gain on point-light in-scattering
+
+/// A point light entity: small draggable marker sphere, POINT_LIGHT + BLOOM (drawn unlit in the
+/// light color; a light is not shaded by the point lights).
+inline thing_ref spawn_point_light(Vector3 pos) {
+  ModelAPI::load("point_light", GenMeshSphere(0.12f, 12, 12));
+  thing_ref light = spawn({.model_name = "point_light", .pos = pos, .debug_name = "point_light"});
+  if (auto& e = ctx.entities[light]) {
+    e.flags.is_collidable = 0;
+    e.bloom_color = point_light_color;
+    ADD_TRAIT(e, POINT_LIGHT);
+    ADD_TRAIT(e, BLOOM);
+  }
+  return light;
+}
+
 inline void update() {
   ctx.frame_buffer.advance();
   auto& frame = ctx.frame_buffer.current();
@@ -724,11 +784,16 @@ inline void update() {
 
   for (auto& e : ctx.entities) {
     if (frame.dragging.count(e.this_ref())) {
-      if (frame.mouse_ray.direction.y != 0) {
+      // slide on the horizontal plane at the entity's own height. Skip when the mouse ray does
+      // not reach that plane in front of the camera (ray going the other way, or nearly level
+      // with it): otherwise a floating entity such as the point light jumps to the camera or far away.
+      if (fabsf(frame.mouse_ray.direction.y) > 0.02f) {
         float t = (e.position.y - frame.mouse_ray.position.y) / frame.mouse_ray.direction.y;
-        Vector3 point =
-            Vector3Add(frame.mouse_ray.position, Vector3Scale(frame.mouse_ray.direction, t));
-        entity_update_position(e.this_ref(), {point.x, e.position.y, point.z});
+        if (t > 0.0f && t < 200.0f) {
+          Vector3 point =
+              Vector3Add(frame.mouse_ray.position, Vector3Scale(frame.mouse_ray.direction, t));
+          entity_update_position(e.this_ref(), {point.x, e.position.y, point.z});
+        }
       }
     } else if (e.spawner != thing_ref::get_nil_ref()) {
       auto& parent = ctx.entities[e.spawner];
@@ -889,10 +954,295 @@ inline void update() {
   //  render
   //
 
+  //
+  // point-light shadow capture: every CASTS_SHADOW entity is drawn six more times from the first
+  // POINT_LIGHT entity's position, into the faces of one cube map. Each texel stores
+  // distance-to-light / SHADOW_FAR (1.0 = nothing there). Nothing samples the cube for shading
+  // yet; the preview sheet below is only there to show that it was filled.
+  //
+
+  DECLARE_TRAIT(POINT_LIGHT, "visual: a point light at this entity's position; shadow casters are redrawn from it");
+  DECLARE_TRAIT(CASTS_SHADOW, "visual: draw flag: drawn again into the shadow pass, so it casts a shadow");
+  std::vector<thing_ref> point_lights;
+  std::vector<thing_ref> shadow_casters;
+  for (auto& e : ctx.entities) {
+    if (HAS_TRAIT(e, POINT_LIGHT)) {
+      point_lights.push_back(e.this_ref());
+      e.bloom_color = point_light_color; // its marker sphere shows the light's color
+      e.render.visible = point_light_marker; // hidden = not drawn and not pickable; still lights
+      e.flags.is_draggable = point_light_marker;
+      e.flags.is_highlightable = point_light_marker;
+    }
+    if (HAS_TRAIT(e, CASTS_SHADOW) && !HAS_TRAIT(e, IS_BILLBOARD) && e.render.visible && e.model.valid())
+      shadow_casters.push_back(e.this_ref());
+  }
+
+  static const float SHADOW_NEAR = 0.1f, SHADOW_FAR = 25.0f;
+  static unsigned int shadowFbo = 0, shadowDepth = 0;
+  static unsigned int shadowCubes[MAX_POINT_LIGHTS] = {};      // one per light, created when first needed
+  static Vector3 shadow_light_positions[MAX_POINT_LIGHTS] = {}; // where each cube was last filled from
+  auto make_shadow_cube = []() { // raylib refuses an *empty* float cube map, so hand it zeros
+    std::vector<float> zeros((size_t)6 * SHADOW_SIZE * SHADOW_SIZE, 0.0f);
+    return rlLoadTextureCubemap(zeros.data(), SHADOW_SIZE, PIXELFORMAT_UNCOMPRESSED_R32, 1);
+  };
+  static Shader fogShader = {0};
+  static RenderTexture2D fogTarget = {0}; // fog at reduced size (premultiplied rgb, a = 1 - transmittance)
+  static struct {
+    int cube[MAX_POINT_LIGHTS];
+    int camPos, camForward, camRight, camUp, tanHalfFov, zFar, time, steps, density, maxDist, noiseScale,
+        noiseAmount, wind, fogTop, fogFade, ambient, scatter, lightCount, lightPos, lightColor, radius, farPlane,
+        bias;
+  } locFog = {};
+  static Material distMaterial = {0};
+  static Material litDebugMaterial = {0}; // debug overlay: red where the point light reaches
+  static int locDbgLightPos = -1, locDbgFar = -1, locDbgBias = -1, locDbgRadius = -1, locDbgTint = -1;
+  static Shader previewShader = {0};
+  // deferred passes: locations shared by the shading shader and the debug tint shader (-1 = unused)
+  struct DeferredLocs {
+    int cube, camPos, camForward, camRight, camUp, tanHalfFov, zNear, zFar, lightPos, farPlane, bias, radius;
+    int gDepth, gNormal, gAlbedo, tint, lightColor, intensity, specStrength, specPower;
+  };
+  static Shader deferredShader = {0}; // debug tint from the camera depth, one full-screen pass
+  static Shader shadeShader = {0};    // point-light shading from the camera depth + G-buffer
+  static DeferredLocs locDef = {}, locShade = {};
+  // G-buffer: ground + entities drawn once with two color outputs (world normal with the normal
+  // map applied, surface color) and a depth texture that says which screen pixels belong to them
+  static RenderTexture2D gbuffer = {0};
+  static Shader gbufferShader = {0};
+  static int locGbufUseNM = -1;
+  static Texture2D white1x1 = {0};
+  static int locLightPos = -1, locFar = -1, locCube = -1, locScale = -1;
+  static bool shadow_tried = false;
+  if (!shadow_tried) { // first use: cube map, FBO, distance material, preview sheet
+    shadow_tried = true;
+    unsigned int shadowCube = shadowCubes[0] = make_shadow_cube();
+    shadowFbo = rlLoadFramebuffer();
+    shadowDepth = rlLoadTextureDepth(SHADOW_SIZE, SHADOW_SIZE, true); // renderbuffer: z-test only
+    rlEnableFramebuffer(shadowFbo);
+    rlFramebufferAttach(shadowFbo, shadowCube, RL_ATTACHMENT_COLOR_CHANNEL0, RL_ATTACHMENT_CUBEMAP_POSITIVE_X, 0);
+    rlFramebufferAttach(shadowFbo, shadowDepth, RL_ATTACHMENT_DEPTH, RL_ATTACHMENT_RENDERBUFFER, 0);
+    bool fbo_ok = shadowCube != 0 && rlFramebufferComplete(shadowFbo);
+    rlDisableFramebuffer();
+
+    Shader dist = ShaderPortable::load_memory(
+        SHADOW_DIST_VS,
+        SHADOW_DIST_FS);
+    distMaterial = LoadMaterialDefault();
+    distMaterial.shader = dist;
+    locLightPos = GetShaderLocation(dist, "lightPos");
+    locFar = GetShaderLocation(dist, "farPlane");
+
+    // debug overlay: redrawn over the normal draw; keeps only the fragments the light reaches
+    // (in range, facing the light, and not behind a shadow caster in the cube) and paints them red
+    Shader lit_dbg = ShaderPortable::load_memory(
+        POINT_LIGHT_DEBUG_VS,
+        POINT_LIGHT_DEBUG_FS);
+    litDebugMaterial = LoadMaterialDefault();
+    litDebugMaterial.shader = lit_dbg;
+    // DrawMesh binds maps[MATERIAL_MAP_CUBEMAP] as a cube map and points this sampler at it
+    lit_dbg.locs[SHADER_LOC_MAP_CUBEMAP] = GetShaderLocation(lit_dbg, "shadowCube");
+    locDbgLightPos = GetShaderLocation(lit_dbg, "lightPos");
+    locDbgFar = GetShaderLocation(lit_dbg, "farPlane");
+    locDbgBias = GetShaderLocation(lit_dbg, "bias");
+    locDbgRadius = GetShaderLocation(lit_dbg, "radius");
+    locDbgTint = GetShaderLocation(lit_dbg, "tint");
+
+    auto deferred_locs = [](const Shader& sh) {
+      auto L = [&](const char* n) { return GetShaderLocation(sh, n); };
+      return DeferredLocs{L("shadowCube"), L("camPos"), L("camForward"), L("camRight"), L("camUp"),
+                          L("tanHalfFov"), L("zNear"), L("zFar"), L("lightPos"), L("farPlane"), L("bias"),
+                          L("radius"), L("gDepth"), L("gNormal"), L("gAlbedo"), L("tint"), L("lightColor"),
+                          L("intensity"), L("specStrength"), L("specPower")};
+    };
+    deferredShader = ShaderPortable::load_memory(nullptr, POINT_LIGHT_DEFERRED_FS);
+    locDef = deferred_locs(deferredShader);
+    shadeShader = ShaderPortable::load_memory(nullptr, POINT_LIGHT_SHADE_FS);
+    locShade = deferred_locs(shadeShader);
+
+    fogShader = ShaderPortable::load_memory(nullptr, VOLUMETRIC_FOG_FS);
+    {
+      auto L = [&](const char* n) { return GetShaderLocation(fogShader, n); };
+      for (int i = 0; i < MAX_POINT_LIGHTS; i++)
+        locFog.cube[i] = L(TextFormat("shadowCube%d", i));
+      locFog.camPos = L("camPos"), locFog.camForward = L("camForward"), locFog.camRight = L("camRight");
+      locFog.camUp = L("camUp"), locFog.tanHalfFov = L("tanHalfFov"), locFog.zFar = L("zFar");
+      locFog.time = L("time"), locFog.steps = L("steps"), locFog.density = L("density");
+      locFog.maxDist = L("maxDist"), locFog.noiseScale = L("noiseScale"), locFog.noiseAmount = L("noiseAmount");
+      locFog.wind = L("wind"), locFog.fogTop = L("fogTop"), locFog.fogFade = L("fogFade");
+      locFog.ambient = L("ambient"), locFog.scatter = L("scatter"), locFog.lightCount = L("lightCount");
+      locFog.lightPos = L("lightPos"), locFog.lightColor = L("lightColor"), locFog.radius = L("radius");
+      locFog.farPlane = L("farPlane"), locFog.bias = L("bias");
+    }
+
+    int gw = GetScreenWidth(), gh = GetScreenHeight();
+    gbuffer = RenderAPI::load_render_texture_depth_tex(gw, gh); // color 0 (normal) + depth texture
+    unsigned int albedo_id = rlLoadTexture(nullptr, gw, gh, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, 1);
+    rlFramebufferAttach(gbuffer.id, albedo_id, RL_ATTACHMENT_COLOR_CHANNEL1, RL_ATTACHMENT_TEXTURE2D, 0);
+    rlEnableFramebuffer(gbuffer.id);
+    rlActiveDrawBuffers(2); // stored with the framebuffer
+    bool gbuffer_ok = rlFramebufferComplete(gbuffer.id);
+    rlDisableFramebuffer();
+    gbuffer_normal_tex = gbuffer.texture;
+    gbuffer_albedo_tex = {albedo_id, gw, gh, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+    gbufferShader = ShaderPortable::load_memory(GBUFFER_VS, GBUFFER_FS);
+    locGbufUseNM = GetShaderLocation(gbufferShader, "useNormalMap");
+
+    // preview: the whole 3x2 sheet is read through one samplerCube
+    previewShader = ShaderPortable::load_memory(nullptr, SHADOW_PREVIEW_FS);
+    locCube = GetShaderLocation(previewShader, "shadowCube");
+    locScale = GetShaderLocation(previewShader, "scale");
+    Image white = GenImageColor(1, 1, WHITE);
+    white1x1 = LoadTextureFromImage(white); // only there to give the preview quad 0..1 UVs
+    UnloadImage(white);
+    shadow_preview = LoadRenderTexture(SHADOW_PREVIEW_TILE * 3, SHADOW_PREVIEW_TILE * 2);
+
+    shadow_ok = fbo_ok && dist.id != rlGetShaderIdDefault() && previewShader.id != rlGetShaderIdDefault() &&
+                lit_dbg.id != rlGetShaderIdDefault() && deferredShader.id != rlGetShaderIdDefault() &&
+                shadeShader.id != rlGetShaderIdDefault() && gbufferShader.id != rlGetShaderIdDefault() &&
+                gbuffer_ok && fogShader.id != rlGetShaderIdDefault();
+    if (!shadow_ok)
+      TraceLog(LOG_WARNING, "SHADOW: point-light shadow cube unavailable (fbo %d)", (int)fbo_ok);
+  }
+
+  shadow_drawn = false;
+  shadow_light_count = 0;
+  if (shadow_ok && !point_lights.empty()) {
+    // standard cube-map face directions / ups, so a lookup is texture(cube, fragWorld - lightPos)
+    static const Vector3 dirs[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+    static const Vector3 ups[6] = {{0, -1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}, {0, -1, 0}, {0, -1, 0}};
+
+    SetShaderValue(distMaterial.shader, locFar, &SHADOW_FAR, SHADER_UNIFORM_FLOAT);
+    rlDrawRenderBatchActive();
+    rlViewport(0, 0, SHADOW_SIZE, SHADOW_SIZE);
+    rlEnableDepthTest();
+    rlDisableColorBlend();
+    rlClearColor(255, 255, 255, 255); // 1.0 = nothing there
+    rlSetMatrixProjection(MatrixPerspective(90.0 * DEG2RAD, 1.0, SHADOW_NEAR, SHADOW_FAR));
+
+    // the first MAX_POINT_LIGHTS lights each fill their own cube
+    int light_n = (int)point_lights.size() < MAX_POINT_LIGHTS ? (int)point_lights.size() : MAX_POINT_LIGHTS;
+    for (int li = 0; li < light_n; li++) {
+      thing_ref light_ref = point_lights[li];
+      Vector3 lp = ctx.entities[light_ref].position;
+      shadow_light_positions[li] = lp;
+      if (shadowCubes[li] == 0)
+        shadowCubes[li] = make_shadow_cube();
+      SetShaderValue(distMaterial.shader, locLightPos, &lp, SHADER_UNIFORM_VEC3);
+      for (int i = 0; i < 6; i++) {
+        rlFramebufferAttach(shadowFbo, shadowCubes[li], RL_ATTACHMENT_COLOR_CHANNEL0,
+                            RL_ATTACHMENT_CUBEMAP_POSITIVE_X + i, 0);
+        rlEnableFramebuffer(shadowFbo); // rlFramebufferAttach leaves framebuffer 0 bound
+        rlClearScreenBuffers();
+        rlSetMatrixModelview(MatrixLookAt(lp, Vector3Add(lp, dirs[i]), ups[i]));
+        for (thing_ref ref : shadow_casters) {
+          if (ref == light_ref)
+            continue; // the light sits at the eye
+          auto& e = ctx.entities[ref];
+          Matrix t = entity_transform(e);
+          for (int m = 0; m < e.model.model.meshCount; m++)
+            DrawMesh(e.model.model.meshes[m], distMaterial, t);
+        }
+      }
+    }
+
+    rlEnableColorBlend();
+    rlDisableDepthTest();
+    rlDisableFramebuffer();
+    rlClearColor(0, 0, 0, 0);
+    shadow_drawn = true;
+    shadow_light_count = light_n;
+    if (point_light_focus >= light_n)
+      point_light_focus = light_n - 1;
+    if (point_light_focus < 0)
+      point_light_focus = 0;
+    unsigned int shadowCube = shadowCubes[point_light_focus]; // the preview and the debug tint show this one
+
+    litDebugMaterial.maps[MATERIAL_MAP_CUBEMAP].texture.id = shadowCube;
+    SetShaderValue(litDebugMaterial.shader, locDbgLightPos, &shadow_light_positions[point_light_focus],
+                   SHADER_UNIFORM_VEC3);
+    SetShaderValue(litDebugMaterial.shader, locDbgFar, &SHADOW_FAR, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(litDebugMaterial.shader, locDbgBias, &point_light_debug_bias, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(litDebugMaterial.shader, locDbgRadius, &point_light_radius, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(litDebugMaterial.shader, locDbgTint, &point_light_tint, SHADER_UNIFORM_FLOAT);
+
+    // preview sheet for the ImGui panel
+    float scale = SHADOW_FAR / shadow_preview_range;
+    int unit = 1;
+    BeginTextureMode(shadow_preview);
+    ClearBackground(BLACK);
+    BeginShaderMode(previewShader);
+    SetShaderValue(previewShader, locScale, &scale, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(previewShader, locCube, &unit, SHADER_UNIFORM_INT);
+    rlActiveTextureSlot(1);
+    rlEnableTextureCubemap(shadowCube); // SetShaderValueTexture only binds 2D textures
+    rlActiveTextureSlot(0);
+    DrawTexturePro(white1x1, {0, 0, 1, 1},
+                   {0, 0, (float)shadow_preview.texture.width, (float)shadow_preview.texture.height}, {0, 0},
+                   0.0f, WHITE);
+    EndShaderMode(); // flushes the quad while the cube is still bound to unit 1
+    rlActiveTextureSlot(1);
+    rlDisableTextureCubemap();
+    rlActiveTextureSlot(0);
+    // one bordered, labelled tile per cube face
+    static const char* face_names[6] = {"+X", "-X", "+Y", "-Y", "+Z", "-Z"};
+    for (int i = 0; i < 6; i++) {
+      int tx = (i % 3) * SHADOW_PREVIEW_TILE, ty = (i / 3) * SHADOW_PREVIEW_TILE;
+      DrawRectangleLinesEx({(float)tx, (float)ty, (float)SHADOW_PREVIEW_TILE, (float)SHADOW_PREVIEW_TILE}, 2.0f,
+                           ORANGE);
+      DrawText(face_names[i], tx + 7, ty + 6, 20, ORANGE);
+    }
+    EndTextureMode();
+  }
+
+  // G-buffer for the deferred point-light passes. Everything the light may shade is drawn once
+  // with its own material (so textures and normal maps bind) and the G-buffer shader swapped in.
+  // Not in it, so never point-lit: particles, BLOOM entities (they are lights), billboards.
+  gbuffer_drawn = false;
+  bool want_tint = point_light_debug && shadow_drawn && point_light_tint > 0.0f;
+  bool want_shade = point_light_shading && shadow_drawn && point_light_intensity > 0.0f;
+  if (want_shade || (want_tint && point_light_deferred)) {
+    auto draw_gbuffer = [&](const Model& model, Matrix t) {
+      for (int m = 0; m < model.meshCount; m++) {
+        Material mat = model.materials[model.meshMaterial[m]];
+        mat.shader = gbufferShader;
+        int use_nm = mat.maps[MATERIAL_MAP_NORMAL].texture.id > 0 ? 1 : 0;
+        SetShaderValue(gbufferShader, locGbufUseNM, &use_nm, SHADER_UNIFORM_INT);
+        DrawMesh(model.meshes[m], mat, t);
+      }
+    };
+    BeginTextureMode(gbuffer);
+    ClearBackground(BLANK);
+    rlDisableColorBlend(); // both targets are written as-is
+    BeginMode3D(ctx.camera);
+    draw_gbuffer(ground, MatrixTranslate(0, GROUND_TOP_Y - GROUND_THICKNESS * 0.5f, 0));
+    for (auto& e : ctx.entities) {
+      if (!e.render.visible || !e.model.valid() || HAS_TRAIT(e, BLOOM) || HAS_TRAIT(e, IS_BILLBOARD))
+        continue;
+      draw_gbuffer(e.model.model, entity_transform(e));
+    }
+    EndMode3D();
+    rlEnableColorBlend();
+    EndTextureMode();
+    gbuffer_drawn = true;
+  }
+
   RenderAPI::layer_start(RenderLayer::Background, ctx.camera);
   ThreePointLight::begin_frame(ctx.camera);
   ThreePointLight::draw_model(ground,
                               MatrixTranslate(0, GROUND_TOP_Y - GROUND_THICKNESS * 0.5f, 0));
+  // debug: the ground again with the point-light shader (see the entity overlay below). The
+  // patches the shadow casters hide from the light stay untinted, which is what shows the shadows.
+  bool lit_debug = want_tint && !point_light_deferred;      // forward: redraw the meshes
+  bool deferred_debug = want_tint && point_light_deferred;  // deferred: one pass after rasterize()
+  if (lit_debug) {
+    rlDrawRenderBatchActive();
+    rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ZERO, RL_ONE, RL_FUNC_ADD, RL_FUNC_ADD);
+    BeginBlendMode(BLEND_CUSTOM_SEPARATE);
+    for (int m = 0; m < ground.meshCount; m++)
+      DrawMesh(ground.meshes[m], litDebugMaterial,
+               MatrixTranslate(0, GROUND_TOP_Y - GROUND_THICKNESS * 0.5f, 0));
+    EndBlendMode();
+  }
 
   RenderAPI::layer_start(RenderLayer::Highlight, ctx.camera);
   if (auto& h = ctx.entities[get_hovered()]) {
@@ -900,6 +1250,8 @@ inline void update() {
       draw_model_colored(h.model.name, entity_transform(h, h.scale * 1.1f), ctx.highlight_color);
     }
   }
+
+  // Rendering entity models
 
   RenderAPI::layer_start(RenderLayer::Entities, ctx.camera);
   ThreePointLight::begin_frame(ctx.camera);
@@ -914,15 +1266,53 @@ inline void update() {
     }
 
     DECLARE_TRAIT(THREE_POINT_LIT, "visual: drawn with the camera-relative key/fill/rim shader");
-    if (HAS_TRAIT(e, THREE_POINT_LIT))
+    DECLARE_TRAIT(BLOOM, "visual: has_bloom: its texture is a light source, drawn unlit in "
+                         "bloom_color and bloomed (see bloom())");
+    if (HAS_TRAIT(e, BLOOM))
+      draw_model_colored(e.model.name, entity_transform(e),
+                         e.bloom_color); // unlit: it IS the light
+    else if (HAS_TRAIT(e, THREE_POINT_LIT))
       ThreePointLight::draw_model(e.model.model, entity_transform(e));
     else
       draw_model_normal(e.model.name, entity_transform(e));
-
     DECLARE_TRAIT(IS_HITBOX, "debug: draws its world bounding box in red");
     if (HAS_TRAIT(e, IS_HITBOX)) {
       DrawBoundingBox(compute_world_bbox(e), RED);
     }
+  }
+
+  // debug: the entities again with the point-light shader. It passes the depth test at equal
+  // depth, keeps only the fragments the light reaches and blends red over the regular color.
+  // The blend leaves the layer's alpha alone, so a faint tint does not turn the entity see-through.
+  if (lit_debug) {
+    rlDrawRenderBatchActive();
+    rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ZERO, RL_ONE, RL_FUNC_ADD, RL_FUNC_ADD);
+    BeginBlendMode(BLEND_CUSTOM_SEPARATE);
+    for (auto& e : ctx.entities) {
+      if (!e.render.visible || !e.model.valid() || HAS_TRAIT(e, POINT_LIGHT))
+        continue;
+      Matrix t = entity_transform(e);
+      for (int m = 0; m < e.model.model.meshCount; m++)
+        DrawMesh(e.model.model.meshes[m], litDebugMaterial, t);
+    }
+    EndBlendMode();
+  }
+
+  // bloom sources: whatever lands in this layer glows (it is not composited as color; the BLOOM
+  // entities above and the Highlight copy are what stay on screen)
+  RenderAPI::layer_start(RenderLayer::Bloom, ctx.camera);
+  for (auto& e : ctx.entities) {
+    if (!HAS_TRAIT(e, BLOOM) || !e.render.visible || !e.model.valid())
+      continue;
+    if (HAS_TRAIT(e, IS_BILLBOARD))
+      draw_model_billboard(e.model.name, e.position, e.scale, e.bloom_color);
+    else
+      draw_model_colored(e.model.name, entity_transform(e), e.bloom_color);
+  }
+  if (auto& h =
+          ctx.entities[get_hovered()]) { // demo: the hovered item glows in the highlight color
+    if (h.render.visible && h.model.valid())
+      draw_model_colored(h.model.name, entity_transform(h, h.scale * 1.1f), ctx.highlight_color);
   }
 
   RenderAPI::layer_start(RenderLayer::Focus, ctx.camera);
@@ -940,19 +1330,168 @@ inline void update() {
     }
   }
 
+  bool want_fog = vfog_enabled && shadow_ok && vfog_density > 0.0f;
+  RenderAPI::want_depth_min = gbuffer_drawn || want_fog;
   RenderAPI::rasterize();
+
+  // screen-space passes over the finished frame. No mesh is redrawn here: each is one full-screen
+  // quad that reads the camera's depth (RenderAPI::dof_depth, nearest over all layers) and works
+  // from the world position that depth gives: point-light shading (added), the debug tint, then
+  // the volumetric fog on top.
+  vfog_drawn = false;
+  if (RenderAPI::dof_depth_drawn && (gbuffer_drawn || want_fog)) {
+    Vector3 fwd = Vector3Normalize(Vector3Subtract(ctx.camera.target, ctx.camera.position));
+    Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, ctx.camera.up));
+    Vector3 up = Vector3CrossProduct(right, fwd);
+    float tan_y = tanf(ctx.camera.fovy * DEG2RAD * 0.5f);
+    Vector2 tan_half = {tan_y * (float)GetScreenWidth() / (float)GetScreenHeight(), tan_y};
+    float z_near = (float)RL_CULL_DISTANCE_NEAR, z_far = (float)RL_CULL_DISTANCE_FAR;
+    Vector3 light_rgb = {point_light_color.r / 255.0f, point_light_color.g / 255.0f,
+                         point_light_color.b / 255.0f};
+    auto& depth = RenderAPI::dof_depth.texture;
+    auto screen_pass = [&](const Shader& sh, const DeferredLocs& l, int li) {
+      int unit = 5; // clear of the units the batch hands out to SetShaderValueTexture (1..4)
+      BeginShaderMode(sh);
+      SetShaderValue(sh, l.cube, &unit, SHADER_UNIFORM_INT);
+      SetShaderValue(sh, l.camPos, &ctx.camera.position, SHADER_UNIFORM_VEC3);
+      SetShaderValue(sh, l.camForward, &fwd, SHADER_UNIFORM_VEC3);
+      SetShaderValue(sh, l.camRight, &right, SHADER_UNIFORM_VEC3);
+      SetShaderValue(sh, l.camUp, &up, SHADER_UNIFORM_VEC3);
+      SetShaderValue(sh, l.tanHalfFov, &tan_half, SHADER_UNIFORM_VEC2);
+      SetShaderValue(sh, l.zNear, &z_near, SHADER_UNIFORM_FLOAT);
+      SetShaderValue(sh, l.zFar, &z_far, SHADER_UNIFORM_FLOAT);
+      SetShaderValue(sh, l.lightPos, &shadow_light_positions[li], SHADER_UNIFORM_VEC3);
+      SetShaderValue(sh, l.farPlane, &SHADOW_FAR, SHADER_UNIFORM_FLOAT);
+      SetShaderValue(sh, l.bias, &point_light_debug_bias, SHADER_UNIFORM_FLOAT);
+      SetShaderValue(sh, l.radius, &point_light_radius, SHADER_UNIFORM_FLOAT);
+      SetShaderValueTexture(sh, l.gDepth, gbuffer.depth);
+      if (l.gNormal >= 0)
+        SetShaderValueTexture(sh, l.gNormal, gbuffer_normal_tex);
+      if (l.gAlbedo >= 0)
+        SetShaderValueTexture(sh, l.gAlbedo, gbuffer_albedo_tex);
+      if (l.tint >= 0)
+        SetShaderValue(sh, l.tint, &point_light_tint, SHADER_UNIFORM_FLOAT);
+      if (l.lightColor >= 0) {
+        SetShaderValue(sh, l.lightColor, &light_rgb, SHADER_UNIFORM_VEC3);
+        SetShaderValue(sh, l.intensity, &point_light_intensity, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(sh, l.specStrength, &point_light_spec_strength, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(sh, l.specPower, &point_light_spec_power, SHADER_UNIFORM_FLOAT);
+      }
+      rlActiveTextureSlot(unit);
+      rlEnableTextureCubemap(shadowCubes[li]);
+      rlActiveTextureSlot(0);
+      DrawTextureRec(depth, {0, 0, (float)depth.width, (float)-depth.height}, {0, 0}, WHITE);
+      EndShaderMode(); // flushes the quad while the cube is still bound
+      rlActiveTextureSlot(unit);
+      rlDisableTextureCubemap();
+      rlActiveTextureSlot(0);
+    };
+    if (gbuffer_drawn && want_shade) {
+      rlSetBlendFactors(RL_ONE, RL_ONE, RL_FUNC_ADD); // light adds onto the frame
+      BeginBlendMode(BLEND_CUSTOM);
+      for (int li = 0; li < shadow_light_count; li++) // one pass per light, each with its own cube
+        screen_pass(shadeShader, locShade, li);
+      EndBlendMode();
+    }
+    if (gbuffer_drawn && deferred_debug)
+      screen_pass(deferredShader, locDef, point_light_focus);
+
+    // volumetric fog, after the point lighting: march each pixel's ray through fBm noise up to the
+    // scene depth; every step is lit by the point lights through their shadow cubes, so the
+    // shadow casters cut dark shafts through the fog.
+    if (want_fog) {
+      float t = (float)GetTime();
+      Vector3 amb = {vfog_ambient.r / 255.0f * vfog_ambient_intensity, vfog_ambient.g / 255.0f * vfog_ambient_intensity,
+                     vfog_ambient.b / 255.0f * vfog_ambient_intensity};
+      Vector3 lcol = Vector3Scale(light_rgb, point_light_shading ? point_light_intensity : 0.0f);
+      const Shader& sh = fogShader;
+      int div = vfog_downscale < 1 ? 1 : (vfog_downscale > 4 ? 4 : vfog_downscale);
+      bool small = div > 1;
+      int fw = GetScreenWidth() / div, fh = GetScreenHeight() / div;
+      if (small) {
+        if (fogTarget.id == 0 || fogTarget.texture.width != fw || fogTarget.texture.height != fh) {
+          if (fogTarget.id)
+            UnloadRenderTexture(fogTarget);
+          fogTarget = RenderAPI::load_render_texture_ex(fw, fh, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, false);
+          SetTextureFilter(fogTarget.texture, TEXTURE_FILTER_BILINEAR); // smooth scale-up
+        }
+        BeginTextureMode(fogTarget);
+        ClearBackground(BLANK);
+      }
+      BeginShaderMode(sh);
+      SetShaderValue(sh, locFog.camPos, &ctx.camera.position, SHADER_UNIFORM_VEC3);
+      SetShaderValue(sh, locFog.camForward, &fwd, SHADER_UNIFORM_VEC3);
+      SetShaderValue(sh, locFog.camRight, &right, SHADER_UNIFORM_VEC3);
+      SetShaderValue(sh, locFog.camUp, &up, SHADER_UNIFORM_VEC3);
+      SetShaderValue(sh, locFog.tanHalfFov, &tan_half, SHADER_UNIFORM_VEC2);
+      SetShaderValue(sh, locFog.zFar, &z_far, SHADER_UNIFORM_FLOAT);
+      SetShaderValue(sh, locFog.time, &t, SHADER_UNIFORM_FLOAT);
+      SetShaderValue(sh, locFog.steps, &vfog_steps, SHADER_UNIFORM_INT);
+      SetShaderValue(sh, locFog.density, &vfog_density, SHADER_UNIFORM_FLOAT);
+      SetShaderValue(sh, locFog.maxDist, &vfog_max_dist, SHADER_UNIFORM_FLOAT);
+      SetShaderValue(sh, locFog.noiseScale, &vfog_noise_scale, SHADER_UNIFORM_FLOAT);
+      SetShaderValue(sh, locFog.noiseAmount, &vfog_noise_amount, SHADER_UNIFORM_FLOAT);
+      SetShaderValue(sh, locFog.wind, &vfog_wind, SHADER_UNIFORM_FLOAT);
+      SetShaderValue(sh, locFog.fogTop, &vfog_top, SHADER_UNIFORM_FLOAT);
+      SetShaderValue(sh, locFog.fogFade, &vfog_fade, SHADER_UNIFORM_FLOAT);
+      SetShaderValue(sh, locFog.ambient, &amb, SHADER_UNIFORM_VEC3);
+      SetShaderValue(sh, locFog.scatter, &vfog_scatter, SHADER_UNIFORM_FLOAT);
+      SetShaderValue(sh, locFog.lightCount, &shadow_light_count, SHADER_UNIFORM_INT);
+      SetShaderValueV(sh, locFog.lightPos, shadow_light_positions, SHADER_UNIFORM_VEC3, MAX_POINT_LIGHTS);
+      SetShaderValue(sh, locFog.lightColor, &lcol, SHADER_UNIFORM_VEC3);
+      SetShaderValue(sh, locFog.radius, &point_light_radius, SHADER_UNIFORM_FLOAT);
+      SetShaderValue(sh, locFog.farPlane, &SHADOW_FAR, SHADER_UNIFORM_FLOAT);
+      SetShaderValue(sh, locFog.bias, &point_light_debug_bias, SHADER_UNIFORM_FLOAT);
+      // six cube samplers on units 5..10. A light slot with no cube yet gets cube 0 so every
+      // sampler has a complete texture; the shader never reads past lightCount.
+      for (int i = 0; i < MAX_POINT_LIGHTS; i++) {
+        int unit = 5 + i;
+        SetShaderValue(sh, locFog.cube[i], &unit, SHADER_UNIFORM_INT);
+        rlActiveTextureSlot(unit);
+        rlEnableTextureCubemap(shadowCubes[i] ? shadowCubes[i] : shadowCubes[0]);
+      }
+      rlActiveTextureSlot(0);
+      // the march is the expensive part (steps x noise x lights per pixel), so it runs at 1/N of
+      // the screen size into fogTarget and is scaled up afterwards; N = 1 draws straight to the frame
+      if (small)
+        rlSetBlendFactors(RL_ONE, RL_ZERO, RL_FUNC_ADD); // store the result as-is
+      else
+        rlSetBlendFactors(RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD); // premultiplied: fog + frame * transmittance
+      BeginBlendMode(BLEND_CUSTOM);
+      DrawTexturePro(depth, {0, 0, (float)depth.width, (float)-depth.height}, {0, 0, (float)fw, (float)fh},
+                     {0, 0}, 0.0f, WHITE);
+      EndBlendMode(); // flushes the quad while the cubes are still bound
+      EndShaderMode();
+      for (int i = 0; i < MAX_POINT_LIGHTS; i++) {
+        rlActiveTextureSlot(5 + i);
+        rlDisableTextureCubemap();
+      }
+      rlActiveTextureSlot(0);
+      if (small) {
+        EndTextureMode();
+        rlSetBlendFactors(RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD);
+        BeginBlendMode(BLEND_CUSTOM);
+        DrawTexturePro(fogTarget.texture, {0, 0, (float)fw, (float)-fh},
+                       {0, 0, (float)GetScreenWidth(), (float)GetScreenHeight()}, {0, 0}, 0.0f, WHITE);
+        EndBlendMode();
+      }
+      vfog_drawn = true;
+    }
+  }
 
   //
   // draw animated texture entities
   //
 
   for (auto& e : ctx.entities) {
-    DECLARE_TRAIT(IS_ANIMATION, "visual: draws animation_id as a screen-space frame sequence; no model");
+    DECLARE_TRAIT(IS_ANIMATION,
+                  "visual: draws animation_id as a screen-space frame sequence; no model");
     if (!HAS_TRAIT(e, IS_ANIMATION) || e.animation_id < 0)
       continue;
     float elapsed = ((float)GetTime() - e.animation_start_time) * e.animation_speed;
 
-    DECLARE_TRAIT(IS_LOOPING, "the IS_ANIMATION frame sequence wraps instead of holding the last frame");
+    DECLARE_TRAIT(IS_LOOPING,
+                  "the IS_ANIMATION frame sequence wraps instead of holding the last frame");
     bool looping = HAS_TRAIT(e, IS_LOOPING);
 
     Texture2D* tex = AnimationRegistry::get_frame(e.animation_id, elapsed, looping);
@@ -1064,7 +1603,196 @@ inline void draw_imgui() {
         ImGui::SliderFloat("fog max", &RenderAPI::fog_max, 0.0f, 1.0f, "%.2f");
       }
     }
+    if (RenderAPI::bloom_available()) {
+      ImGui::Checkbox("Bloom", &RenderAPI::bloom_enabled);
+      if (RenderAPI::bloom_enabled) {
+        ImGui::SameLine();
+        ImGui::Checkbox("show source", &RenderAPI::bloom_show_source);
+        ImGui::SameLine();
+        ImGui::TextDisabled("(hovered item + entities with the bloom trait)");
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("bloom intensity", &RenderAPI::bloom_intensity, 0.0f, 4.0f, "%.2f");
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("bloom radius", &RenderAPI::bloom_radius, 0.5f, 4.0f, "%.1f");
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderInt("blur passes", &RenderAPI::bloom_passes, 1, 6);
+      }
+    }
     ImGui::Separator();
+
+    //
+    // point light: deferred shading from the first POINT_LIGHT entity, plus the debug tint
+    //
+
+    if (ImGui::CollapsingHeader("Point Light", ImGuiTreeNodeFlags_DefaultOpen)) {
+      if (!shadow_ok) {
+        ImGui::TextDisabled("unavailable");
+      } else if (!shadow_drawn) {
+        ImGui::TextDisabled("no point light (add the point_light trait to an entity)");
+      } else {
+        int light_i = 0;
+        for (auto& e : ctx.entities) { // the first MAX_POINT_LIGHTS point lights are the ones in use
+          if (!HAS_TRAIT(e, POINT_LIGHT))
+            continue;
+          ImGui::PushID(light_i);
+          ImGui::SetNextItemWidth(200);
+          ImGui::DragFloat3(TextFormat("light %d position%s", light_i, light_i >= MAX_POINT_LIGHTS ? " (unused)" : ""),
+                            &e.position.x, 0.05f);
+          ImGui::PopID();
+          light_i++;
+        }
+        if (light_i < MAX_POINT_LIGHTS) {
+          if (ImGui::Button(TextFormat("add point light (%d / %d)", light_i, MAX_POINT_LIGHTS))) {
+            float ang = (float)light_i * 2.4f; // spread new lights around the middle
+            spawn_point_light({cosf(ang) * 3.0f, 2.0f, sinf(ang) * 3.0f});
+          }
+        } else {
+          ImGui::TextDisabled("%d / %d point lights", light_i, MAX_POINT_LIGHTS);
+        }
+        if (shadow_light_count > 1) {
+          ImGui::SetNextItemWidth(200);
+          ImGui::SliderInt("light shown in cube preview / debug tint", &point_light_focus, 0, shadow_light_count - 1);
+        }
+        ImGui::Checkbox("show light marker (viewable + draggable)", &point_light_marker);
+        ImGui::Checkbox("shading (deferred)", &point_light_shading);
+        float lc[3] = {point_light_color.r / 255.0f, point_light_color.g / 255.0f, point_light_color.b / 255.0f};
+        ImGui::SetNextItemWidth(200);
+        if (ImGui::ColorEdit3("light color", lc))
+          point_light_color = {(unsigned char)(lc[0] * 255.0f), (unsigned char)(lc[1] * 255.0f),
+                               (unsigned char)(lc[2] * 255.0f), 255};
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("light intensity", &point_light_intensity, 0.0f, 6.0f, "%.2f");
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("effective radius (units)", &point_light_radius, 0.5f, 25.0f, "%.1f");
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("shadow bias (units)", &point_light_debug_bias, 0.0f, 0.2f, "%.3f");
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("highlight strength", &point_light_spec_strength, 0.0f, 2.0f, "%.2f");
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("highlight tightness", &point_light_spec_power, 2.0f, 128.0f, "%.0f");
+        ImGui::Checkbox("debug: tint point-lit red", &point_light_debug);
+        if (point_light_debug) {
+          ImGui::SameLine();
+          ImGui::Checkbox("deferred (from camera depth)", &point_light_deferred);
+          ImGui::SetNextItemWidth(200);
+          ImGui::SliderFloat("tint intensity", &point_light_tint, 0.0f, 1.0f, "%.2f");
+        }
+      }
+    }
+
+    //
+    // volumetric fog: marched fBm noise, lit by the point lights through their shadow cubes
+    //
+
+    if (ImGui::CollapsingHeader("Volumetric Fog", ImGuiTreeNodeFlags_DefaultOpen)) {
+      if (!shadow_ok) {
+        ImGui::TextDisabled("unavailable");
+      } else {
+        ImGui::Checkbox("enabled", &vfog_enabled);
+        ImGui::SameLine();
+        ImGui::TextDisabled(vfog_drawn ? "(drawn, %d light(s))" : "(not drawn)", shadow_light_count);
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderInt("march steps", &vfog_steps, 8, 128);
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderInt("resolution divisor (GPU load)", &vfog_downscale, 1, 4);
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("density", &vfog_density, 0.0f, 0.6f, "%.3f");
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("light scattering", &vfog_scatter, 0.0f, 8.0f, "%.2f");
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("noise amount", &vfog_noise_amount, 0.0f, 1.0f, "%.2f");
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("noise scale", &vfog_noise_scale, 0.05f, 2.0f, "%.2f");
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("wind", &vfog_wind, 0.0f, 2.0f, "%.2f");
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("fog top (y)", &vfog_top, 0.0f, 12.0f, "%.1f");
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("fade below top (units)", &vfog_fade, 0.1f, 8.0f, "%.1f");
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("max distance (units)", &vfog_max_dist, 5.0f, 100.0f, "%.0f");
+        float ac[3] = {vfog_ambient.r / 255.0f, vfog_ambient.g / 255.0f, vfog_ambient.b / 255.0f};
+        ImGui::SetNextItemWidth(200);
+        if (ImGui::ColorEdit3("ambient color", ac))
+          vfog_ambient = {(unsigned char)(ac[0] * 255.0f), (unsigned char)(ac[1] * 255.0f),
+                          (unsigned char)(ac[2] * 255.0f), 255};
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("ambient intensity", &vfog_ambient_intensity, 0.0f, 2.0f, "%.2f");
+      }
+    }
+
+    //
+    // render buffers: every off-screen target, and whether the last frame drew into it
+    //
+
+    if (ImGui::CollapsingHeader("Render Buffers", ImGuiTreeNodeFlags_DefaultOpen)) {
+      if (!shadow_ok) {
+        ImGui::TextDisabled("point_shadow cube: unavailable");
+      } else if (!shadow_drawn) {
+        ImGui::TextDisabled("point_shadow cube: no point light (add the point_light trait to an entity)");
+      } else {
+        ImGui::TextUnformatted("point_shadow cube (dark = near the light, white = nothing)");
+        rlImGuiImageRenderTexture(&shadow_preview);
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("preview range (units)", &shadow_preview_range, 1.0f, 25.0f, "%.0f");
+        if (gbuffer_drawn) {
+          ImGui::TextUnformatted("G-buffer: normal (normal map applied) | surface color");
+          int tw = 300, th = tw * gbuffer_normal_tex.height / gbuffer_normal_tex.width;
+          Rectangle flip = {0, 0, (float)gbuffer_normal_tex.width, (float)-gbuffer_normal_tex.height};
+          rlImGuiImageRect(&gbuffer_normal_tex, tw, th, flip);
+          ImGui::SameLine();
+          rlImGuiImageRect(&gbuffer_albedo_tex, tw, th, flip);
+        }
+      }
+      auto buffers = RenderAPI::buffer_list();
+      buffers.push_back({TextFormat("point_shadow x%d", shadow_light_count > 0 ? shadow_light_count : 1),
+                         "one cube map (6 faces) per point light: distance from the light to the shadow casters",
+                         shadow_ok ? 1u : 0u, SHADOW_SIZE, SHADOW_SIZE, "R32F cube x6", false, shadow_drawn});
+      buffers.push_back({"gbuffer_normal", "deferred point light: world normal (normal map applied) + depth",
+                         shadow_ok ? 1u : 0u, GetScreenWidth(), GetScreenHeight(), "RGBA8", true, gbuffer_drawn});
+      buffers.push_back({"gbuffer_albedo", "deferred point light: surface color", shadow_ok ? 1u : 0u,
+                         GetScreenWidth(), GetScreenHeight(), "RGBA8", false, gbuffer_drawn});
+      int drawn_count = 0;
+      for (auto& b : buffers)
+        drawn_count += b.drawn ? 1 : 0;
+      ImGui::Text("Drawn this frame: %d / %zu", drawn_count, buffers.size());
+      if (ImGui::BeginTable("render_buffers", 5,
+                            ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+        ImGui::TableSetupColumn("#");
+        ImGui::TableSetupColumn("buffer");
+        ImGui::TableSetupColumn("drawn");
+        ImGui::TableSetupColumn("size");
+        ImGui::TableSetupColumn("format");
+        ImGui::TableHeadersRow();
+        for (int i = 0; i < (int)buffers.size(); i++) {
+          auto& b = buffers[i];
+          ImGui::TableNextRow();
+          ImGui::TableNextColumn();
+          ImGui::Text("%d", i);
+          ImGui::TableNextColumn();
+          if (b.drawn)
+            ImGui::TextUnformatted(b.name);
+          else
+            ImGui::TextDisabled("%s", b.name);
+          if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s (fbo %u)", b.role, b.fbo);
+          ImGui::TableNextColumn();
+          if (b.fbo == 0)
+            ImGui::TextDisabled("n/a");
+          else if (b.drawn)
+            ImGui::TextColored({0.4f, 1.0f, 0.4f, 1.0f}, "yes");
+          else
+            ImGui::TextDisabled("-");
+          ImGui::TableNextColumn();
+          if (b.fbo)
+            ImGui::Text("%dx%d", b.width, b.height);
+          ImGui::TableNextColumn();
+          if (b.fbo)
+            ImGui::Text("%s%s", b.format, b.depth_tex ? " + depth" : "");
+        }
+        ImGui::EndTable();
+      }
+    }
 
     //
     // model spawn list
@@ -1091,8 +1819,8 @@ inline void draw_imgui() {
         std::string groups_str = debug_entity_groups(e);
         bool is_selected = (e.this_ref() == ctx.selected);
         if (ImGui::Selectable(TextFormat("%d: %s [%s] {%s}", idx,
-                                         e.model.valid() ? e.model.name : "---",
-                                         traits_str.c_str(), groups_str.c_str()),
+                                         e.model.valid() ? e.model.name : "---", traits_str.c_str(),
+                                         groups_str.c_str()),
                               is_selected)) {
           ctx.selected = e.this_ref();
         }
@@ -1118,6 +1846,14 @@ inline void draw_imgui() {
       if (ImGui::Checkbox("Visible", &visible))
         sel.render.visible = visible;
       ImGui::InputText("log_text", sel.log_text.data(), sel.log_text.size());
+      if (HAS_TRAIT(sel, BLOOM)) {
+        float bc[3] = {sel.bloom_color.r / 255.0f, sel.bloom_color.g / 255.0f,
+                       sel.bloom_color.b / 255.0f};
+        ImGui::SetNextItemWidth(200);
+        if (ImGui::ColorEdit3("bloom color", bc))
+          sel.bloom_color = {(unsigned char)(bc[0] * 255.0f), (unsigned char)(bc[1] * 255.0f),
+                             (unsigned char)(bc[2] * 255.0f), 255};
+      }
       if (ImGui::TreeNodeEx("Traits", ImGuiTreeNodeFlags_DefaultOpen)) {
         for (const auto& t : TRAIT_INFO) {
           bool on = TraitAPI::has(sel, t.id);
@@ -1166,6 +1902,25 @@ inline void draw_imgui() {
       if (ImGui::Button("Remove from all")) {
         for (auto& e : ctx.entities)
           RM_TRAIT(e, THREE_POINT_LIT);
+      }
+      int light_count = 0;
+      for (auto& e : ctx.entities)
+        if (HAS_TRAIT(e, POINT_LIGHT))
+          light_count++;
+      ImGui::Text("Point lights: %d (up to 6 are used)", light_count);
+      int caster_count = 0;
+      for (auto& e : ctx.entities)
+        if (HAS_TRAIT(e, CASTS_SHADOW))
+          caster_count++;
+      ImGui::Text("Shadow casters: %d / %zu", caster_count, entity_count());
+      if (ImGui::Button("All cast shadows")) {
+        for (auto& e : ctx.entities)
+          ADD_TRAIT(e, CASTS_SHADOW);
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("None cast shadows")) {
+        for (auto& e : ctx.entities)
+          RM_TRAIT(e, CASTS_SHADOW);
       }
     }
 
@@ -1345,7 +2100,8 @@ int main() {
                        [](const std::string& msg) { GameConsoleAPI::print(msg); }, port);
   }
 
-  // Traits themselves are generated (gen/entity_traits.gen.hpp); only behaviour hooks are wired here.
+  // Traits themselves are generated (gen/entity_traits.gen.hpp); only behaviour hooks are wired
+  // here.
   TraitAPI::set_hooks(TraitId::WSAD, wsad_init, wsad_update);
   TraitAPI::set_hooks(TraitId::PICKUP, pickup_init, pickup_update);
   TraitAPI::set_hooks(TraitId::CROSS_SLASH_HITBOX, pickup_init, pickup_update);
@@ -1357,6 +2113,12 @@ int main() {
   // then in each lua file I could just run the lua file
 
   LuaAPI::run_file("assets/setup.lua");
+
+  // hard-coded point light above the middle of the world: fills the shadow cube and drives the
+  // deferred shading (see the render section of update()). It has a small sphere so you can see
+  // where it is, drawn unlit in the light's color (BLOOM: it is a light, so the point light does
+  // not shade it), and it can be dragged with the mouse like any is_draggable entity.
+  GameCtxAPI::spawn_point_light({0.0f, 0.35f, 0.0f});
 
 #if defined(__EMSCRIPTEN__)
   // the browser owns the loop: it calls frame() once per animation frame and never

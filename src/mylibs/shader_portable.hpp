@@ -19,7 +19,8 @@ inline constexpr const char* ES3_HEADER =
     "#version 300 es\n"
     "precision highp float;\n"
     "precision highp int;\n"
-    "precision highp sampler2D;";
+    "precision highp sampler2D;\n"
+    "precision highp samplerCube;";
 
 /// Swap the `#version 330` header for the ES 3.00 one when building for the web.
 inline std::string adapt(const char* src) {

@@ -189,6 +189,7 @@ console_print("seed_deck group: head " .. anchor .. " + 16 members")
 
 for i = 0, entity_count() - 1 do
   trait_add(i, "three_point_lit")
+  trait_add(i, "casts_shadow")
 end
 light_scheme("Studio Neutral")
 console_print("three_point_lit applied to " .. entity_count() .. " entities")

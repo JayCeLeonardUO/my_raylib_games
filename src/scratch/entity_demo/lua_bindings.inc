@@ -603,6 +603,49 @@ static int l_fog_sky(lua_State* L) {
   return 1;
 }
 
+// bloom([on], [intensity], [radius], [passes]) -> on, intensity, radius, passes
+static int l_bloom(lua_State* L) {
+  if (lua_gettop(L) >= 1)
+    RenderAPI::bloom_enabled = lua_toboolean(L, 1) && RenderAPI::bloom_available();
+  if (lua_gettop(L) >= 2)
+    RenderAPI::bloom_intensity = (float)luaL_checknumber(L, 2);
+  if (lua_gettop(L) >= 3)
+    RenderAPI::bloom_radius = (float)luaL_checknumber(L, 3);
+  if (lua_gettop(L) >= 4)
+    RenderAPI::bloom_passes = (int)luaL_checkinteger(L, 4);
+  lua_pushboolean(L, RenderAPI::bloom_enabled);
+  lua_pushnumber(L, RenderAPI::bloom_intensity);
+  lua_pushnumber(L, RenderAPI::bloom_radius);
+  lua_pushinteger(L, RenderAPI::bloom_passes);
+  return 4;
+}
+
+// bloom_show_source([on]) -> on. Debug: show the depth-masked bloom source instead of the frame.
+static int l_bloom_show_source(lua_State* L) {
+  if (lua_gettop(L) >= 1)
+    RenderAPI::bloom_show_source = lua_toboolean(L, 1);
+  lua_pushboolean(L, RenderAPI::bloom_show_source);
+  return 1;
+}
+
+// bloom_color(index, [r, g, b]) -> r, g, b. What a BLOOM entity emits (texture x this color).
+static int l_bloom_color(lua_State* L) {
+  int idx = (int)luaL_checkinteger(L, 1);
+  thing_ref ref = entity_ref_from_index(idx);
+  auto& e = GameCtxAPI::ctx.entities[ref];
+  if (!e) {
+    LuaAPI::log("lua: bloom_color: no entity at index " + std::to_string(idx));
+    return 0;
+  }
+  if (lua_gettop(L) >= 4)
+    e.bloom_color = {(unsigned char)luaL_checkinteger(L, 2), (unsigned char)luaL_checkinteger(L, 3),
+                     (unsigned char)luaL_checkinteger(L, 4), 255};
+  lua_pushinteger(L, e.bloom_color.r);
+  lua_pushinteger(L, e.bloom_color.g);
+  lua_pushinteger(L, e.bloom_color.b);
+  return 3;
+}
+
 // sun([x, y, z]) -> x, y, z. Get or set the glint sun position (world space).
 static int l_sun(lua_State* L) {
   auto& g = GameCtxAPI::glints;
@@ -725,6 +768,12 @@ inline const LuaAPI::Binding BINDINGS[] = {
      "atmospheric fog: alpha = 1 - exp(-(depth - start) * density), capped at max, tinted over the frame"},
     {"fog_color", l_fog_color, "fog_color([r, g, b]) -> r, g, b", "get/set the fog tint (0-255)"},
     {"fog_sky", l_fog_sky, "fog_sky([on]) -> on", "also tint pixels where nothing was drawn"},
+    {"bloom", l_bloom, "bloom([on], [intensity], [radius], [passes]) -> on, intensity, radius, passes",
+     "glow around entities with the bloom trait (and the hovered one); radius in half-res texels"},
+    {"bloom_show_source", l_bloom_show_source, "bloom_show_source([on]) -> on",
+     "debug: show the depth-masked bloom source instead of the frame"},
+    {"bloom_color", l_bloom_color, "bloom_color(index, [r, g, b]) -> r, g, b",
+     "what a bloom entity emits: its texture times this color (0-255), default white"},
     {"console_print", l_console_print, "console_print(msg)", "print a single string to the game console"},
 };
 

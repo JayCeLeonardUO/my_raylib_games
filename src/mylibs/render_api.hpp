@@ -16,13 +16,14 @@ enum class RenderLayer : int {
   Background = 0,
   World = 1,
   Entities = 2,
-  Highlight = 3,
-  Focus = 4,
-  Effects = 5,
-  UI_World = 6,
-  Overlay = 7,
-  Debug = 8,
-  COUNT = 9
+  Bloom = 3,      // bloom source: drawn here glows (not composited as color, see LayerData)
+  Highlight = 4,
+  Focus = 5,
+  Effects = 6,
+  UI_World = 7,
+  Overlay = 8,
+  Debug = 9,
+  COUNT = 10
 };
 
 // ============================================================================
@@ -45,7 +46,9 @@ namespace RenderAPI {
 
 struct LayerData {
   RenderTexture2D texture = {0};
-  bool used = false;
+  bool used = false;  // drawn into since the last rasterize()
+  bool drawn = false; // snapshot of `used` from the last rasterize(), for the buffer list
+  bool bloom_source = false; // feeds the bloom pass only; draw_color_layers() skips it
 };
 
 inline std::vector<LayerData> layers;
@@ -93,7 +96,33 @@ inline Shader fog_shader = {0};
 inline int fog_loc_far = -1, fog_loc_color = -1, fog_loc_start = -1, fog_loc_density = -1,
            fog_loc_max = -1, fog_loc_sky = -1;
 
+// ---- bloom ----
+// Whatever is drawn into the Bloom layer is a light source. The layer is masked by depth
+// (occluded emitters do not glow through things), downsampled to half resolution, blurred with a
+// separable gaussian, and added onto the frame. There is no HDR headroom (RGBA8 everywhere), so
+// the explicit layer replaces the brightness threshold of a classic HDR bloom.
+inline bool bloom_enabled = false;
+inline float bloom_intensity = 1.0f;  // gain on the added glow
+inline float bloom_radius = 1.0f;     // blur step in half-res texels
+inline int bloom_passes = 3;          // horizontal+vertical gaussian pairs
+inline bool bloom_show_source = false; // debug: show the masked bloom source instead of the frame
+inline RenderTexture2D bloom_a = {0}; // RGBA8, half res, ping
+inline RenderTexture2D bloom_b = {0}; // RGBA8, half res, pong
+inline Shader bloom_mask_shader = {0};
+inline Shader bloom_blur_shader = {0};
+inline int bloom_loc_depth = -1, bloom_loc_min = -1, bloom_loc_near = -1, bloom_loc_far = -1;
+inline int blur_loc_texel = -1, blur_loc_dir = -1, blur_loc_radius = -1, blur_loc_gain = -1;
+
 inline bool layers_depth_tex = false; // every layer FBO got a sampleable depth texture
+
+// Set by a game that runs its own screen-space pass after rasterize(): forces dof_depth (nearest
+// linear depth / zFar over the layers) to be built even when DoF, fog and bloom are all off.
+inline bool want_depth_min = false;
+
+// ---- buffer list (dev tool) ----
+// Which of the off-screen targets the last rasterize() actually wrote. Reset at the top of
+// rasterize(), set by the pass that fills the target; buffer_list() reports them.
+inline bool dof_scene_drawn = false, dof_depth_drawn = false, bloom_a_drawn = false, bloom_b_drawn = false;
 
 inline bool depth_available() {
   return depth_shader.id != 0 && layers_depth_tex;
@@ -105,6 +134,11 @@ inline bool dof_available() {
 
 inline bool fog_available() {
   return dof_available() && fog_shader.id != 0;
+}
+
+inline bool bloom_available() {
+  return dof_available() && bloom_mask_shader.id != 0 && bloom_blur_shader.id != 0 && bloom_a.id != 0 &&
+         bloom_b.id != 0 && static_cast<int>(RenderLayer::Bloom) < layer_count;
 }
 
 // GLSL 330: sample the depth texture, linearize with the projection's near/far, map to gray.
@@ -205,6 +239,53 @@ void main() {
 }
 )";
 
+// GLSL 330 bloom mask: texture0 = Bloom layer color, bloomDepth = that layer's depth texture,
+// minDepth = nearest linear depth / zFar across all layers (dof_depth). A pixel only glows if the
+// emitter is the nearest surface there, so bloom does not leak through occluders.
+inline const char* BLOOM_MASK_FS = R"(#version 330
+in vec2 fragTexCoord;
+out vec4 finalColor;
+uniform sampler2D texture0;
+uniform sampler2D bloomDepth;
+uniform sampler2D minDepth;
+uniform float zNear;
+uniform float zFar;
+void main() {
+  vec4 c = texture(texture0, fragTexCoord);
+  float d = texture(bloomDepth, fragTexCoord).r;
+  float lin = 1.0;
+  if (d < 1.0) {
+    float ndc = d * 2.0 - 1.0;
+    lin = (2.0 * zNear * zFar) / (zFar + zNear - ndc * (zFar - zNear)) / zFar;
+  }
+  float nearest = texture(minDepth, fragTexCoord).r;
+  if (c.a <= 0.0 || lin > nearest + 0.002) { finalColor = vec4(0.0); return; }
+  finalColor = vec4(c.rgb * c.a, c.a);
+}
+)";
+
+// GLSL 330 separable gaussian (9 taps). dir = (1,0) or (0,1); step = dir * texel * radius.
+// gain scales the result, so the final pass can also apply the bloom intensity.
+inline const char* BLOOM_BLUR_FS = R"(#version 330
+in vec2 fragTexCoord;
+out vec4 finalColor;
+uniform sampler2D texture0;
+uniform vec2 texel;
+uniform vec2 dir;
+uniform float radius;
+uniform float gain;
+void main() {
+  float w[5] = float[](0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
+  vec2 step = dir * texel * radius;
+  vec4 sum = texture(texture0, fragTexCoord) * w[0];
+  for (int i = 1; i < 5; i++) {
+    sum += texture(texture0, fragTexCoord + step * float(i)) * w[i];
+    sum += texture(texture0, fragTexCoord - step * float(i)) * w[i];
+  }
+  finalColor = sum * gain;
+}
+)";
+
 /// raylib's LoadRenderTexture with a chosen color format and, optionally, a sampleable depth
 /// *texture* instead of the stock depth renderbuffer (pattern from the shaders_write_depth
 /// example). Falls back to LoadRenderTexture if the FBO fails.
@@ -284,6 +365,8 @@ inline void init(int count = static_cast<int>(RenderLayer::COUNT)) {
     layers[i].used = false;
     layers_depth_tex = layers_depth_tex && ok;
   }
+  if (static_cast<int>(RenderLayer::Bloom) < count)
+    layers[static_cast<int>(RenderLayer::Bloom)].bloom_source = true;
   depth_shader = ShaderPortable::load_memory(nullptr, DEPTH_VIS_FS);
   if (depth_shader.id != rlGetShaderIdDefault()) {
     depth_loc_near = GetShaderLocation(depth_shader, "zNear");
@@ -327,9 +410,43 @@ inline void init(int count = static_cast<int>(RenderLayer::COUNT)) {
     fog_shader = {0};
     TraceLog(LOG_WARNING, "RENDERAPI: fog shader failed to compile");
   }
-  TraceLog(LOG_INFO, "RENDERAPI: depth view %s, depth-of-field %s, fog %s",
+  bool bloom_a_ok = false, bloom_b_ok = false;
+  int bw = screen_w > 1 ? screen_w / 2 : 1, bh = screen_h > 1 ? screen_h / 2 : 1;
+  bloom_a = load_render_texture_ex(bw, bh, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, false, &bloom_a_ok);
+  bloom_b = load_render_texture_ex(bw, bh, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, false, &bloom_b_ok);
+  if (!bloom_a_ok || !bloom_b_ok) {
+    UnloadRenderTexture(bloom_a);
+    UnloadRenderTexture(bloom_b);
+    bloom_a = {0};
+    bloom_b = {0};
+  } else {
+    // bilinear: the half-res blur and the upscale to the screen both lean on it
+    SetTextureFilter(bloom_a.texture, TEXTURE_FILTER_BILINEAR);
+    SetTextureFilter(bloom_b.texture, TEXTURE_FILTER_BILINEAR);
+  }
+  bloom_mask_shader = ShaderPortable::load_memory(nullptr, BLOOM_MASK_FS);
+  if (bloom_mask_shader.id != rlGetShaderIdDefault()) {
+    bloom_loc_depth = GetShaderLocation(bloom_mask_shader, "bloomDepth");
+    bloom_loc_min = GetShaderLocation(bloom_mask_shader, "minDepth");
+    bloom_loc_near = GetShaderLocation(bloom_mask_shader, "zNear");
+    bloom_loc_far = GetShaderLocation(bloom_mask_shader, "zFar");
+  } else {
+    bloom_mask_shader = {0};
+    TraceLog(LOG_WARNING, "RENDERAPI: bloom mask shader failed to compile");
+  }
+  bloom_blur_shader = ShaderPortable::load_memory(nullptr, BLOOM_BLUR_FS);
+  if (bloom_blur_shader.id != rlGetShaderIdDefault()) {
+    blur_loc_texel = GetShaderLocation(bloom_blur_shader, "texel");
+    blur_loc_dir = GetShaderLocation(bloom_blur_shader, "dir");
+    blur_loc_radius = GetShaderLocation(bloom_blur_shader, "radius");
+    blur_loc_gain = GetShaderLocation(bloom_blur_shader, "gain");
+  } else {
+    bloom_blur_shader = {0};
+    TraceLog(LOG_WARNING, "RENDERAPI: bloom blur shader failed to compile");
+  }
+  TraceLog(LOG_INFO, "RENDERAPI: depth view %s, depth-of-field %s, fog %s, bloom %s",
            depth_available() ? "available" : "unavailable", dof_available() ? "available" : "unavailable",
-           fog_available() ? "available" : "unavailable");
+           fog_available() ? "available" : "unavailable", bloom_available() ? "available" : "unavailable");
 }
 
 inline void shutdown() {
@@ -349,6 +466,18 @@ inline void shutdown() {
   if (fog_shader.id)
     UnloadShader(fog_shader);
   fog_shader = {0};
+  if (bloom_mask_shader.id)
+    UnloadShader(bloom_mask_shader);
+  bloom_mask_shader = {0};
+  if (bloom_blur_shader.id)
+    UnloadShader(bloom_blur_shader);
+  bloom_blur_shader = {0};
+  if (bloom_a.id)
+    UnloadRenderTexture(bloom_a);
+  bloom_a = {0};
+  if (bloom_b.id)
+    UnloadRenderTexture(bloom_b);
+  bloom_b = {0};
   if (dof_scene.id)
     UnloadRenderTexture(dof_scene);
   dof_scene = {0};
@@ -427,8 +556,10 @@ inline void draw_depth_min(float vis_far) {
 }
 
 inline void clear_used() {
-  for (auto& data : layers)
+  for (auto& data : layers) {
+    data.drawn = data.used;
     data.used = false;
+  }
 }
 
 /// Depth view: white = far, black = near.
@@ -442,7 +573,7 @@ inline void rasterize_depth() {
 inline void draw_color_layers() {
   for (int i = 0; i < layer_count; i++) {
     auto& data = layers[i];
-    if (!data.used)
+    if (!data.used || data.bloom_source)
       continue;
     DrawTextureRec(data.texture.texture,
                    {0, 0, (float)data.texture.texture.width, (float)-data.texture.texture.height},
@@ -452,6 +583,7 @@ inline void draw_color_layers() {
 
 /// Nearest depth across the used layers -> dof_depth (r = linear depth / zFar, 1.0 = nothing drawn).
 inline void build_depth_min() {
+  dof_depth_drawn = true;
   BeginTextureMode(dof_depth);
   ClearBackground(WHITE);
   draw_depth_min(0.0f);
@@ -461,6 +593,7 @@ inline void build_depth_min() {
 /// Depth-of-field: composite color -> dof_scene, min depth -> dof_depth, blur onto the current
 /// target. Leaves `used` set and dof_depth valid so fog can follow.
 inline void rasterize_dof() {
+  dof_scene_drawn = true;
   BeginTextureMode(dof_scene);
   ClearBackground(BLANK);
   draw_color_layers();
@@ -505,24 +638,153 @@ inline void draw_fog() {
   EndShaderMode();
 }
 
+/// One gaussian pass of `src` into the current target. `dst_w/h` size the quad (half res for the
+/// ping-pong, screen size for the final upscale).
+inline void bloom_blur_pass(const RenderTexture2D& src, Vector2 dir, float gain, int dst_w, int dst_h) {
+  Vector2 texel = {1.0f / (float)src.texture.width, 1.0f / (float)src.texture.height};
+  SetShaderValue(bloom_blur_shader, blur_loc_texel, &texel, SHADER_UNIFORM_VEC2);
+  SetShaderValue(bloom_blur_shader, blur_loc_dir, &dir, SHADER_UNIFORM_VEC2);
+  SetShaderValue(bloom_blur_shader, blur_loc_radius, &bloom_radius, SHADER_UNIFORM_FLOAT);
+  SetShaderValue(bloom_blur_shader, blur_loc_gain, &gain, SHADER_UNIFORM_FLOAT);
+  BeginShaderMode(bloom_blur_shader);
+  DrawTexturePro(src.texture, {0, 0, (float)src.texture.width, (float)-src.texture.height},
+                 {0, 0, (float)dst_w, (float)dst_h}, {0, 0}, 0.0f, WHITE);
+  EndShaderMode();
+}
+
+/// Bloom: mask the Bloom layer by depth into bloom_a (half res), blur a<->b, add onto the current
+/// target. Expects dof_depth to be filled. Leaves the blend mode as it found it.
+inline void draw_bloom() {
+  auto& src = layers[static_cast<int>(RenderLayer::Bloom)].texture;
+  int bw = bloom_a.texture.width, bh = bloom_a.texture.height;
+  float z_near = (float)RL_CULL_DISTANCE_NEAR, z_far = (float)RL_CULL_DISTANCE_FAR;
+
+  // 1. masked, premultiplied source at half res. The layer is drawn opaque (BLEND_ALPHA would
+  //    re-multiply by alpha); the mask shader already folds alpha into rgb.
+  bloom_a_drawn = true;
+  BeginTextureMode(bloom_a);
+  ClearBackground(BLANK);
+  rlSetBlendFactors(RL_ONE, RL_ZERO, RL_FUNC_ADD);
+  BeginBlendMode(BLEND_CUSTOM);
+  BeginShaderMode(bloom_mask_shader);
+  SetShaderValue(bloom_mask_shader, bloom_loc_near, &z_near, SHADER_UNIFORM_FLOAT);
+  SetShaderValue(bloom_mask_shader, bloom_loc_far, &z_far, SHADER_UNIFORM_FLOAT);
+  SetShaderValueTexture(bloom_mask_shader, bloom_loc_depth, src.depth);
+  SetShaderValueTexture(bloom_mask_shader, bloom_loc_min, dof_depth.texture);
+  DrawTexturePro(src.texture, {0, 0, (float)src.texture.width, (float)-src.texture.height},
+                 {0, 0, (float)bw, (float)bh}, {0, 0}, 0.0f, WHITE);
+  EndShaderMode();
+  EndBlendMode();
+  EndTextureMode();
+
+  if (bloom_show_source) {
+    DrawTexturePro(bloom_a.texture, {0, 0, (float)bw, (float)-bh}, {0, 0, (float)screen_w, (float)screen_h},
+                   {0, 0}, 0.0f, WHITE);
+    return;
+  }
+
+  // 2. separable gaussian ping-pong (premultiplied data: copy, do not alpha-blend)
+  bloom_b_drawn = true;
+  rlSetBlendFactors(RL_ONE, RL_ZERO, RL_FUNC_ADD);
+  BeginBlendMode(BLEND_CUSTOM);
+  int passes = bloom_passes < 1 ? 1 : bloom_passes;
+  for (int i = 0; i < passes - 1; i++) {
+    BeginTextureMode(bloom_b);
+    bloom_blur_pass(bloom_a, {1, 0}, 1.0f, bw, bh);
+    EndTextureMode();
+    BeginTextureMode(bloom_a);
+    bloom_blur_pass(bloom_b, {0, 1}, 1.0f, bw, bh);
+    EndTextureMode();
+  }
+  BeginTextureMode(bloom_b);
+  bloom_blur_pass(bloom_a, {1, 0}, 1.0f, bw, bh);
+  EndTextureMode();
+  EndBlendMode();
+
+  // 3. last vertical pass straight onto the frame, scaled by the intensity. Plain ONE+ONE add:
+  //    the data is premultiplied, so raylib's BLEND_ADDITIVE (SRC_ALPHA, ONE) would dim the edges.
+  rlSetBlendFactors(RL_ONE, RL_ONE, RL_FUNC_ADD);
+  BeginBlendMode(BLEND_CUSTOM);
+  bloom_blur_pass(bloom_b, {0, 1}, bloom_intensity, screen_w, screen_h);
+  EndBlendMode();
+}
+
 inline void rasterize() {
   close_layer();
+  dof_scene_drawn = dof_depth_drawn = bloom_a_drawn = bloom_b_drawn = false;
   if (depth_view && depth_available()) {
     rasterize_depth();
     return;
   }
   bool fog = fog_enabled && fog_available();
+  bool bloom = bloom_enabled && bloom_available() && layers[static_cast<int>(RenderLayer::Bloom)].used;
   if (dof_enabled && dof_available()) {
     rasterize_dof(); // fills dof_depth on the way
   } else {
     draw_color_layers();
-    if (fog)
+    if (fog || bloom || (want_depth_min && dof_available()))
       build_depth_min();
   }
+  if (bloom)
+    draw_bloom(); // before fog, so the glow is fogged by depth like everything else
   if (fog)
     draw_fog();
   clear_used();
 }
 
+// ============================================================================
+// Buffer list (dev tool): every off-screen target and whether the last frame wrote it
+// ============================================================================
+
+inline const char* layer_name(int layer) {
+  static const char* names[] = {"Background", "World", "Entities", "Bloom", "Highlight",
+                                "Focus", "Effects", "UI_World", "Overlay", "Debug"};
+  if (layer < 0 || layer >= static_cast<int>(RenderLayer::COUNT))
+    return "?";
+  return names[layer];
+}
+
+inline const char* pixel_format_name(int format) {
+  switch (format) {
+  case PIXELFORMAT_UNCOMPRESSED_R8G8B8A8: return "RGBA8";
+  case PIXELFORMAT_UNCOMPRESSED_R32: return "R32F";
+  case PIXELFORMAT_UNCOMPRESSED_R32G32B32A32: return "RGBA32F";
+  case PIXELFORMAT_UNCOMPRESSED_R16G16B16A16: return "RGBA16F";
+  default: return "other";
+  }
+}
+
+struct BufferInfo {
+  const char* name;
+  const char* role;      // what the target holds
+  unsigned int fbo = 0;  // 0 = not allocated
+  int width = 0, height = 0;
+  const char* format = "";
+  bool depth_tex = false; // has a sampleable depth texture attached
+  bool drawn = false;     // written during the last rasterize()d frame
+};
+
+inline BufferInfo buffer_info(const char* name, const char* role, const RenderTexture2D& rt, bool depth_tex,
+                              bool drawn) {
+  return {name, role, rt.id, rt.texture.width, rt.texture.height,
+          rt.id ? pixel_format_name(rt.texture.format) : "", rt.id != 0 && depth_tex, rt.id != 0 && drawn};
+}
+
+/// Every off-screen target in pipeline order: the layers (composite order), then the post targets.
+inline std::vector<BufferInfo> buffer_list() {
+  std::vector<BufferInfo> out;
+  for (int i = 0; i < layer_count; i++) {
+    auto& data = layers[i];
+    out.push_back(buffer_info(layer_name(i), data.bloom_source ? "layer (bloom source, not composited)" : "layer",
+                              data.texture, layers_depth_tex, data.drawn));
+  }
+  out.push_back(buffer_info("dof_depth", "nearest linear depth over the layers (DoF, fog, bloom mask)", dof_depth,
+                            false, dof_depth_drawn));
+  out.push_back(buffer_info("dof_scene", "composited color, input to the DoF blur", dof_scene, true,
+                            dof_scene_drawn));
+  out.push_back(buffer_info("bloom_a", "half res: masked bloom source / blur ping", bloom_a, false, bloom_a_drawn));
+  out.push_back(buffer_info("bloom_b", "half res: blur pong", bloom_b, false, bloom_b_drawn));
+  return out;
+}
 
 } // namespace RenderAPI

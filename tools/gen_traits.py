@@ -121,6 +121,8 @@ def scan(src_dir):
                 errors.append(f"{rel}:{line}: error: {kind}: bad trait identifier '{ident}' (want UPPER_SNAKE)")
                 continue
             if kind == "DECLARE_TRAIT":
+                # clang-format wraps a long doc into adjacent literals ("a " "b"); join them
+                doc = re.sub(r'(?<!\\)"\s+"', "", doc)
                 if not (doc.startswith('"') and doc.endswith('"')):
                     errors.append(f"{rel}:{line}: error: DECLARE_TRAIT({ident}, ...) doc must be a string literal")
                     continue
